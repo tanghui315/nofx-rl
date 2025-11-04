@@ -1,28 +1,106 @@
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { api } from './lib/api';
-import { EquityChart } from './components/EquityChart';
+import AILearning from './components/AILearning';
 import { AITradersPage } from './components/AITradersPage';
+import { CompetitionPage } from './components/CompetitionPage';
+import { EquityChart } from './components/EquityChart';
+import HeaderBar from './components/landing/HeaderBar';
 import { LoginPage } from './components/LoginPage';
 import { RegisterPage } from './components/RegisterPage';
-import { CompetitionPage } from './components/CompetitionPage';
-import { LandingPage } from './pages/LandingPage';
-import HeaderBar from './components/landing/HeaderBar';
-import AILearning from './components/AILearning';
-import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { t, type Language } from './i18n/translations';
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { useSystemConfig } from './hooks/useSystemConfig';
+import { t, type Language } from './i18n/translations';
+import { api } from './lib/api';
+import { LandingPage } from './pages/LandingPage';
 import type {
-  SystemStatus,
   AccountInfo,
-  Position,
   DecisionRecord,
+  Position,
   Statistics,
+  SystemStatus,
   TraderInfo,
 } from './types';
 
 type Page = 'competition' | 'traders' | 'trader';
+
+// 平仓按钮组件
+function ClosePositionButton({ 
+  position, 
+  traderId, 
+  language 
+}: { 
+  position: Position; 
+  traderId?: string;
+  language: Language;
+}) {
+  const [isClosing, setIsClosing] = useState(false);
+  const { mutate } = useSWR<Position[]>(
+    traderId ? `positions-${traderId}` : null,
+    () => api.getPositions(traderId)
+  );
+  const { mutate: mutateAccount } = useSWR(
+    traderId ? `account-${traderId}` : null,
+    () => api.getAccount(traderId)
+  );
+
+  const handleClose = async () => {
+    if (!traderId) {
+      alert(t('closeFailed', language) + ': ' + 'No trader selected');
+      return;
+    }
+
+    // 确认对话框
+    const sideText = position.side === 'long' ? t('long', language) : t('short', language);
+    const confirmed = window.confirm(
+      `${t('confirmClose', language)}\n\n` +
+      `${t('symbol', language)}: ${position.symbol}\n` +
+      `${t('side', language)}: ${sideText}\n` +
+      `${t('quantity', language)}: ${position.quantity.toFixed(4)}\n` +
+      `${t('unrealizedPnL', language)}: ${position.unrealized_pnl >= 0 ? '+' : ''}${position.unrealized_pnl.toFixed(2)} USDT (${position.unrealized_pnl_pct.toFixed(2)}%)`
+    );
+
+    if (!confirmed) return;
+
+    setIsClosing(true);
+
+    try {
+      await api.closePosition(
+        traderId,
+        position.symbol,
+        position.side as 'long' | 'short',
+        0 // 0 表示全部平仓
+      );
+
+      // 成功提示
+      alert(t('closeSuccess', language));
+
+      // 刷新持仓和账户数据
+      mutate();
+      mutateAccount();
+    } catch (error: any) {
+      console.error('平仓失败:', error);
+      alert(`${t('closeFailed', language)}: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsClosing(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClose}
+      disabled={isClosing}
+      className="px-3 py-1 rounded text-xs font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-110"
+      style={{
+        background: 'rgba(246, 70, 93, 0.1)',
+        color: '#F6465D',
+        border: '1px solid rgba(246, 70, 93, 0.3)',
+      }}
+    >
+      {isClosing ? t('closing', language) : t('close', language)}
+    </button>
+  );
+}
 
 // 获取友好的AI模型名称
 function getModelDisplayName(modelId: string): string {
@@ -530,6 +608,7 @@ function TraderDetailsPage({
                   <th className="pb-3 font-semibold text-gray-400">{t('leverage', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('unrealizedPnL', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('liqPrice', language)}</th>
+                  <th className="pb-3 font-semibold text-gray-400">{t('operation', language)}</th>
                 </tr>
               </thead>
               <tbody>
@@ -564,6 +643,13 @@ function TraderDetailsPage({
                     </td>
                     <td className="py-3 font-mono" style={{ color: '#848E9C' }}>
                       {pos.liquidation_price.toFixed(4)}
+                    </td>
+                    <td className="py-3">
+                      <ClosePositionButton 
+                        position={pos} 
+                        traderId={selectedTraderId}
+                        language={language}
+                      />
                     </td>
                   </tr>
                 ))}

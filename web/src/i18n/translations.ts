@@ -49,6 +49,12 @@ export const translations = {
     short: 'SHORT',
     noPositions: 'No Positions',
     noActivePositions: 'No active trading positions',
+    operation: 'Operation',
+    close: 'Close',
+    closing: 'Closing...',
+    confirmClose: 'Confirm Close Position',
+    closeSuccess: 'Position closed successfully',
+    closeFailed: 'Failed to close position',
 
     // Recent Decisions
     recentDecisions: 'Recent Decisions',
@@ -466,6 +472,12 @@ export const translations = {
     short: '空头',
     noPositions: '无持仓',
     noActivePositions: '当前没有活跃的交易持仓',
+    operation: '操作',
+    close: '平仓',
+    closing: '平仓中...',
+    confirmClose: '确认平仓',
+    closeSuccess: '平仓成功',
+    closeFailed: '平仓失败',
 
     // Recent Decisions
     recentDecisions: '最近决策',

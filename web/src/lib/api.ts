@@ -1,16 +1,16 @@
 import type {
-  SystemStatus,
-  AccountInfo,
-  Position,
-  DecisionRecord,
-  Statistics,
-  TraderInfo,
-  AIModel,
-  Exchange,
-  CreateTraderRequest,
-  UpdateModelConfigRequest,
-  UpdateExchangeConfigRequest,
-  CompetitionData,
+    AccountInfo,
+    AIModel,
+    CompetitionData,
+    CreateTraderRequest,
+    DecisionRecord,
+    Exchange,
+    Position,
+    Statistics,
+    SystemStatus,
+    TraderInfo,
+    UpdateExchangeConfigRequest,
+    UpdateModelConfigRequest,
 } from '../types';
 
 const API_BASE = '/api';
@@ -196,6 +196,35 @@ export const api = {
       headers: getAuthHeaders(),
     });
     if (!res.ok) throw new Error('获取持仓列表失败');
+    return res.json();
+  },
+
+  // 手动平仓
+  async closePosition(
+    traderId: string,
+    symbol: string,
+    side: 'long' | 'short',
+    quantity?: number
+  ): Promise<{ message: string; result: any }> {
+    const res = await fetch(`${API_BASE}/positions/close`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trader_id: traderId,
+        symbol,
+        side,
+        quantity: quantity || 0, // 0表示全部平仓
+      }),
+    });
+    
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || '平仓失败');
+    }
+    
     return res.json();
   },
 

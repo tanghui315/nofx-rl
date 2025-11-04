@@ -922,6 +922,30 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	}, nil
 }
 
+// ClosePosition 手动平仓（供API调用）
+func (at *AutoTrader) ClosePosition(symbol, side string, quantity float64) (map[string]interface{}, error) {
+	log.Printf("🔧 手动平仓请求: %s %s 数量=%.4f", symbol, side, quantity)
+	
+	var result map[string]interface{}
+	var err error
+	
+	if side == "long" {
+		result, err = at.trader.CloseLong(symbol, quantity)
+	} else if side == "short" {
+		result, err = at.trader.CloseShort(symbol, quantity)
+	} else {
+		return nil, fmt.Errorf("无效的持仓方向: %s，必须是 'long' 或 'short'", side)
+	}
+	
+	if err != nil {
+		log.Printf("❌ 手动平仓失败: %v", err)
+		return nil, err
+	}
+	
+	log.Printf("✓ 手动平仓成功: %s %s", symbol, side)
+	return result, nil
+}
+
 // GetPositions 获取持仓列表（用于API）
 func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 	positions, err := at.trader.GetPositions()

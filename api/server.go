@@ -126,6 +126,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/status", s.handleStatus)
 			protected.GET("/account", s.handleAccount)
 			protected.GET("/positions", s.handlePositions)
+			protected.POST("/positions/close", s.handleClosePosition) // 手动平仓
 			protected.GET("/decisions", s.handleDecisions)
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
@@ -936,6 +937,63 @@ func (s *Server) handlePositions(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, positions)
+}
+
+// handleClosePosition 手动平仓
+func (s *Server) handleClosePosition(c *gin.Context) {
+	userID := c.GetString("user_id")
+	
+	// 解析请求体
+	var req struct {
+		TraderID string  `json:"trader_id" binding:"required"`
+		Symbol   string  `json:"symbol" binding:"required"`
+		Side     string  `json:"side" binding:"required"` // "long" 或 "short"
+		Quantity float64 `json:"quantity"`                 // 可选，0表示全部平仓
+	}
+	
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+		return
+	}
+	
+	// 验证持仓方向
+	if req.Side != "long" && req.Side != "short" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "持仓方向必须是 'long' 或 'short'"})
+		return
+	}
+	
+	// 校验交易员是否属于当前用户
+	_, _, _, err := s.database.GetTraderConfig(userID, req.TraderID)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "交易员不存在或无访问权限"})
+		return
+	}
+	
+	// 获取交易员实例
+	trader, err := s.traderManager.GetTrader(req.TraderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "交易员不存在"})
+		return
+	}
+	
+	log.Printf("📋 收到平仓请求 [用户=%s, 交易员=%s, 币种=%s, 方向=%s, 数量=%.4f]",
+		userID, req.TraderID, req.Symbol, req.Side, req.Quantity)
+	
+	// 执行平仓
+	result, err := trader.ClosePosition(req.Symbol, req.Side, req.Quantity)
+	if err != nil {
+		log.Printf("❌ 平仓失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("平仓失败: %v", err),
+		})
+		return
+	}
+	
+	log.Printf("✓ 平仓成功 [%s %s]", req.Symbol, req.Side)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "平仓成功",
+		"result":  result,
+	})
 }
 
 // handleDecisions 决策日志列表
