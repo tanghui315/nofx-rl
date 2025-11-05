@@ -285,7 +285,7 @@ Docker автоматически обрабатывает все зависим
 #### Шаг 1: Подготовьте конфигурацию
 ```bash
 # Скопируйте шаблон конфигурации
-cp config.example.jsonc config.json
+cp config.json.example config.json
 
 # Отредактируйте и заполните ваши API ключи
 nano config.json  # или используйте любой редактор
@@ -320,6 +320,7 @@ docker compose up -d --build
 - **Русский**: См. документацию Docker (скоро будет доступно)
 - **English**: See [DOCKER_DEPLOY.en.md](DOCKER_DEPLOY.en.md)
 - **中文**: 查看 [DOCKER_DEPLOY.md](DOCKER_DEPLOY.md)
+- **日本語**: [DOCKER_DEPLOY.ja.md](DOCKER_DEPLOY.ja.md)を参照
 
 ---
 
@@ -423,7 +424,7 @@ cd ..
 **Шаг 1**: Скопируйте и переименуйте файл примера конфигурации
 
 ```bash
-cp config.example.jsonc config.json
+cp config.json.example config.json
 ```
 
 **Шаг 2**: Отредактируйте `config.json` и заполните ваши API ключи

@@ -288,7 +288,7 @@ Docker автоматично обробляє всі залежності (Go, 
 #### Крок 1: Підготуйте конфігурацію
 ```bash
 # Скопіюйте шаблон конфігурації
-cp config.example.jsonc config.json
+cp config.json.example config.json
 
 # Відредагуйте та заповніть ваші API ключі
 nano config.json  # або використайте будь-який редактор
@@ -323,6 +323,7 @@ docker compose up -d --build
 - **Українська**: Дивіться документацію Docker (скоро буде доступно)
 - **English**: See [DOCKER_DEPLOY.en.md](DOCKER_DEPLOY.en.md)
 - **中文**: 查看 [DOCKER_DEPLOY.md](DOCKER_DEPLOY.md)
+- **日本語**: [DOCKER_DEPLOY.ja.md](DOCKER_DEPLOY.ja.md)を参照
 
 ---
 
@@ -426,7 +427,7 @@ cd ..
 **Крок 1**: Скопіюйте та перейменуйте файл прикладу конфігурації
 
 ```bash
-cp config.example.jsonc config.json
+cp config.json.example config.json
 ```
 
 **Крок 2**: Відредагуйте `config.json` та заповніть ваші API ключі
