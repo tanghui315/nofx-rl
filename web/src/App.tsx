@@ -726,6 +726,9 @@ function TraderDetailsPage({
                       <th className="pb-3 font-semibold text-gray-400">
                         {t('liqPrice', language)}
                       </th>
+                      <th className="pb-3 font-semibold text-gray-400">
+                        {t('operation', language)}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -806,6 +809,13 @@ function TraderDetailsPage({
                           style={{ color: '#848E9C' }}
                         >
                           {pos.liquidation_price.toFixed(4)}
+                        </td>
+                        <td className="py-3">
+                          <ClosePositionButton
+                            position={pos}
+                            traderId={selectedTraderId}
+                            language={language}
+                          />
                         </td>
                       </tr>
                     ))}

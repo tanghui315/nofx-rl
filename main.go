@@ -305,8 +305,8 @@ func main() {
 
 	// 获取API服务器端口
 	apiPort := 8080 // 默认端口
-	if apiPortStr != "" {
-		if port, err := strconv.Atoi(apiPortStr); err == nil {
+	if apiPortStr != "" && apiPortStr != "0" {
+		if port, err := strconv.Atoi(apiPortStr); err == nil && port > 0 {
 			apiPort = port
 		}
 	}
