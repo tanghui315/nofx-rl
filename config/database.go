@@ -279,6 +279,7 @@ func (d *Database) initDefaultData() error {
 		"anomaly_gambit_enabled":       "false", // 搏一搏模式开关，默认关闭
 		"anomaly_gambit_max_position":  "0.02",  // 搏一搏最大仓位百分比（2%）
 		"anomaly_gambit_max_amount":    "5000",  // 搏一搏最大绝对金额（$5,000）
+		"anomaly_gambit_min_amount":    "50",    // 搏一搏最小绝对金额（$50）
 		"anomaly_gambit_min_confidence": "0.8",   // 搏一搏最小置信度（80%）
 		"anomaly_gambit_max_stop_loss":  "0.03",  // 搏一搏最大止损（3%）
 		"anomaly_gambit_cooling_minutes": "60",    // 搏一搏冷却期（60分钟）

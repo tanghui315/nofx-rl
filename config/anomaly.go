@@ -63,6 +63,7 @@ type AnomalyConfig struct {
 		// 搏一搏参数
 		GambitMaxPositionPct float64 // 搏一搏最大仓位百分比
 		GambitMaxAmount      float64 // 搏一搏最大绝对金额
+		GambitMinAmount      float64 // 搏一搏最小绝对金额（避免过小单）
 		GambitMinConfidence  float64 // 搏一搏最小置信度
 		GambitMaxStopLoss    float64 // 搏一搏最大止损
 		GambitCoolingMinutes int     // 搏一搏冷却期
@@ -183,6 +184,7 @@ func (c *AnomalyConfig) applyGambitMapping(db *Database) {
 	// 搏一搏参数（从数据库读取或使用默认值）
 	c.internal.GambitMaxPositionPct = 0.02  // 2%
 	c.internal.GambitMaxAmount = 5000.0     // $5,000
+	c.internal.GambitMinAmount = 50.0       // $50（默认最小金额）
 	c.internal.GambitMinConfidence = 0.8    // 80%
 	c.internal.GambitMaxStopLoss = 0.03     // 3%
 	c.internal.GambitCoolingMinutes = 60    // 60分钟
@@ -197,6 +199,12 @@ func (c *AnomalyConfig) applyGambitMapping(db *Database) {
 	if val, err := db.GetSystemConfig("anomaly_gambit_max_amount"); err == nil {
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
 			c.internal.GambitMaxAmount = f
+		}
+	}
+
+	if val, err := db.GetSystemConfig("anomaly_gambit_min_amount"); err == nil {
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			c.internal.GambitMinAmount = f
 		}
 	}
 
@@ -347,8 +355,16 @@ func (c *AnomalyConfig) CalculateGambitPosition(accountBalance float64, requeste
 	// 方法2：取绝对上限
 	positionByMax := c.internal.GambitMaxAmount
 
-	// 取较小值
-	actualPosition := math.Min(positionByPct, positionByMax)
+	// 候选：不超过上限
+	candidate := math.Min(positionByPct, positionByMax)
+
+	// 若低于最小金额，则返回0（放弃执行，避免超越风险比例而强行抬升）
+	if candidate < c.internal.GambitMinAmount {
+		log.Printf("⚠️  搏一搏候选仓位过小：$%.2f < 最小金额$%.2f，放弃执行", candidate, c.internal.GambitMinAmount)
+		return 0
+	}
+
+	actualPosition := candidate
 
 	log.Printf("搏一搏仓位计算：账户$%.2f × %.2f%% = $%.2f, 上限$%.2f, 实际$%.2f",
 		accountBalance, requestedPct*100, positionByPct, positionByMax, actualPosition)
@@ -362,6 +378,7 @@ func (c *AnomalyConfig) GetGambitConfig() map[string]interface{} {
 		"enabled":            c.GetGambitEnabled(),
 		"max_position_pct":   c.internal.GambitMaxPositionPct,
 		"max_amount":         c.internal.GambitMaxAmount,
+		"min_amount":         c.internal.GambitMinAmount,
 		"min_confidence":     c.internal.GambitMinConfidence,
 		"max_stop_loss":      c.internal.GambitMaxStopLoss,
 		"cooling_minutes":    c.internal.GambitCoolingMinutes,

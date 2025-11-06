@@ -2264,12 +2264,19 @@ func (s *Server) handleGetAnomalyConfig(c *gin.Context) {
 
 // handleUpdateAnomalyConfig 更新异常监控配置
 func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
-	var req struct {
-		Mode          string `json:"mode"`
-		Sensitivity   string `json:"sensitivity"`
-		UseLLM        *bool  `json:"use_llm"`
-		GambitEnabled *bool  `json:"gambit_enabled"`
-	}
+    var req struct {
+        Mode                string   `json:"mode"`
+        Sensitivity         string   `json:"sensitivity"`
+        UseLLM              *bool    `json:"use_llm"`
+        GambitEnabled       *bool    `json:"gambit_enabled"`
+        // 可选高级项
+        GambitMaxPosition   *float64 `json:"gambit_max_position"`   // 0-1
+        GambitMaxAmount     *float64 `json:"gambit_max_amount"`     // USDT
+        GambitMinAmount     *float64 `json:"gambit_min_amount"`     // USDT
+        GambitMinConfidence *float64 `json:"gambit_min_confidence"` // 0-1
+        GambitMaxStopLoss   *float64 `json:"gambit_max_stop_loss"`  // 0-1
+        GambitCoolingMin    *int     `json:"gambit_cooling_minutes"`
+    }
 	
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
@@ -2293,12 +2300,12 @@ func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
 		return
 	}
 	
-	if req.Mode != "" {
-		if err := s.database.SetSystemConfig("anomaly_mode", req.Mode); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新模式失败"})
-			return
-		}
-	}
+    if req.Mode != "" {
+        if err := s.database.SetSystemConfig("anomaly_mode", req.Mode); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新模式失败"})
+            return
+        }
+    }
 	
 	if req.Sensitivity != "" {
 		if err := s.database.SetSystemConfig("anomaly_sensitivity", req.Sensitivity); err != nil {
@@ -2318,16 +2325,91 @@ func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
 		}
 	}
 	
-	if req.GambitEnabled != nil {
-		value := "false"
-		if *req.GambitEnabled {
-			value = "true"
-		}
-		if err := s.database.SetSystemConfig("anomaly_gambit_enabled", value); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新搏一搏配置失败"})
-			return
-		}
-	}
+    if req.GambitEnabled != nil {
+        value := "false"
+        if *req.GambitEnabled {
+            value = "true"
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_enabled", value); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新搏一搏配置失败"})
+            return
+        }
+    }
+
+    // 高级项：校验并保存
+    if req.GambitMaxPosition != nil {
+        if *req.GambitMaxPosition <= 0 || *req.GambitMaxPosition > 1 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_position 必须在(0,1]"})
+            return
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_max_position", fmt.Sprintf("%g", *req.GambitMaxPosition)); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_position 失败"})
+            return
+        }
+    }
+    if req.GambitMaxAmount != nil {
+        if *req.GambitMaxAmount <= 0 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_amount 必须>0"})
+            return
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_max_amount", fmt.Sprintf("%g", *req.GambitMaxAmount)); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_amount 失败"})
+            return
+        }
+    }
+    if req.GambitMinAmount != nil {
+        if *req.GambitMinAmount <= 0 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_amount 必须>0"})
+            return
+        }
+        // 若同时设置了 max，检查 min<=max；否则读取当前 max 检查
+        var currentMax float64 = 0
+        if req.GambitMaxAmount != nil {
+            currentMax = *req.GambitMaxAmount
+        } else {
+            if v, err := s.database.GetSystemConfig("anomaly_gambit_max_amount"); err == nil {
+                fmt.Sscanf(v, "%f", &currentMax)
+            }
+        }
+        if currentMax > 0 && *req.GambitMinAmount > currentMax {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_amount 不能大于 gambit_max_amount"})
+            return
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_min_amount", fmt.Sprintf("%g", *req.GambitMinAmount)); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_min_amount 失败"})
+            return
+        }
+    }
+    if req.GambitMinConfidence != nil {
+        if *req.GambitMinConfidence < 0 || *req.GambitMinConfidence > 1 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_confidence 必须在[0,1]"})
+            return
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_min_confidence", fmt.Sprintf("%g", *req.GambitMinConfidence)); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_min_confidence 失败"})
+            return
+        }
+    }
+    if req.GambitMaxStopLoss != nil {
+        if *req.GambitMaxStopLoss <= 0 || *req.GambitMaxStopLoss > 0.2 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_stop_loss 建议在(0,0.2]之间（0-20%）"})
+            return
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_max_stop_loss", fmt.Sprintf("%g", *req.GambitMaxStopLoss)); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_stop_loss 失败"})
+            return
+        }
+    }
+    if req.GambitCoolingMin != nil {
+        if *req.GambitCoolingMin < 0 || *req.GambitCoolingMin > 360 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_cooling_minutes 范围无效(0-360)"})
+            return
+        }
+        if err := s.database.SetSystemConfig("anomaly_gambit_cooling_minutes", fmt.Sprintf("%d", *req.GambitCoolingMin)); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_cooling_minutes 失败"})
+            return
+        }
+    }
 	
 	anomalyConfig, err := config.LoadAnomalyConfig(s.database)
 	if err != nil {
@@ -2337,15 +2419,16 @@ func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
 	
 	log.Printf("✅ 异常监控配置已更新：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
 	
-	c.JSON(http.StatusOK, gin.H{
-		"message": "配置更新成功",
-		"config": gin.H{
-			"mode":           anomalyConfig.Mode,
-			"sensitivity":    anomalyConfig.Sensitivity,
-			"use_llm":        anomalyConfig.UseLLM,
-			"gambit_enabled": anomalyConfig.GambitEnabled,
-		},
-	})
+    c.JSON(http.StatusOK, gin.H{
+        "message": "配置更新成功",
+        "config": gin.H{
+            "mode":           anomalyConfig.Mode,
+            "sensitivity":    anomalyConfig.Sensitivity,
+            "use_llm":        anomalyConfig.UseLLM,
+            "gambit_enabled": anomalyConfig.GambitEnabled,
+            "gambit_config":  anomalyConfig.GetGambitConfig(),
+        },
+    })
 }
 
 // handleGetAnomalyStatus 获取异常监控状态

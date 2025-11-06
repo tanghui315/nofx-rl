@@ -196,9 +196,9 @@ func validateGambitConstraints(
 
 // validatePositionSize 验证仓位大小（实现双重限制）
 func validatePositionSize(
-	decision *AnomalyDecision,
-	ctx *Context,
-	config *config.AnomalyConfig,
+    decision *AnomalyDecision,
+    ctx *Context,
+    config *config.AnomalyConfig,
 ) error {
 	if decision.PositionSizeUSD <= 0 {
 		return fmt.Errorf("仓位大小必须>0: $%.2f", decision.PositionSizeUSD)
@@ -207,7 +207,7 @@ func validatePositionSize(
 	gambitConfig := config.GetGambitConfig()
 	maxAmount := gambitConfig["max_amount"].(float64)
 	
-	// 如果是搏一搏，使用双重限制：min(账户余额 × 百分比, 绝对金额上限)
+	// 如果是搏一搏，使用双重限制：min(账户余额 × 百分比, 绝对金额上限)，并检查最小金额
 	if config.CanGambit() && decision.Confidence >= gambitConfig["min_confidence"].(float64) {
 		maxPositionPct := gambitConfig["max_position_pct"].(float64)
 		
@@ -219,6 +219,15 @@ func validatePositionSize(
 		
 		// ✅ 双重限制：取两者较小值
 		actualMaxPosition := math.Min(positionByPct, positionByMax)
+
+		// 最小金额校验
+		minAmount := 0.0
+		if v, ok := gambitConfig["min_amount"].(float64); ok {
+			minAmount = v
+		}
+		if decision.PositionSizeUSD < minAmount {
+			return fmt.Errorf("搏一搏仓位过小: $%.2f < 最小金额 $%.2f", decision.PositionSizeUSD, minAmount)
+		}
 		
 		if decision.PositionSizeUSD > actualMaxPosition {
 			return fmt.Errorf("搏一搏仓位超限: $%.2f > $%.2f (账户 $%.2f × %.1f%% = $%.2f, 上限 $%.2f)", 

@@ -40,6 +40,14 @@ export function AnomalyConfigPage() {
   const [sensitivity, setSensitivity] = useState<string>('medium')
   const [useLLM, setUseLLM] = useState<boolean>(false)
   const [gambitEnabled, setGambitEnabled] = useState<boolean>(false)
+  // 高级设置
+  const [gambitMaxPosition, setGambitMaxPosition] = useState<number>(0.02)
+  const [gambitMaxAmount, setGambitMaxAmount] = useState<number>(5000)
+  const [gambitMinAmount, setGambitMinAmount] = useState<number>(50)
+  const [gambitMinConfidence, setGambitMinConfidence] = useState<number>(0.8)
+  const [gambitMaxStopLoss, setGambitMaxStopLoss] = useState<number>(0.03)
+  const [gambitCoolingMinutes, setGambitCoolingMinutes] = useState<number>(60)
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false)
   
   // 搏一搏风险确认弹窗
   const [showGambitConfirm, setShowGambitConfirm] = useState(false)
@@ -63,6 +71,15 @@ export function AnomalyConfigPage() {
       setSensitivity(data.sensitivity)
       setUseLLM(data.use_llm)
       setGambitEnabled(data.gambit_enabled)
+      const gc = data.gambit_config || {}
+      if (gc) {
+        if (typeof gc.max_position_pct === 'number') setGambitMaxPosition(gc.max_position_pct)
+        if (typeof gc.max_amount === 'number') setGambitMaxAmount(gc.max_amount)
+        if (typeof gc.min_amount === 'number') setGambitMinAmount(gc.min_amount)
+        if (typeof gc.min_confidence === 'number') setGambitMinConfidence(gc.min_confidence)
+        if (typeof gc.max_stop_loss === 'number') setGambitMaxStopLoss(gc.max_stop_loss)
+        if (typeof gc.cooling_minutes === 'number') setGambitCoolingMinutes(gc.cooling_minutes)
+      }
     } catch (error) {
       console.error('加载配置失败:', error)
       setMessage({ type: 'error', text: '加载配置失败' })
@@ -90,6 +107,13 @@ export function AnomalyConfigPage() {
         sensitivity,
         use_llm: useLLM,
         gambit_enabled: gambitEnabled,
+        // 高级设置（可选传输）
+        gambit_max_position: gambitEnabled ? gambitMaxPosition : undefined,
+        gambit_max_amount: gambitEnabled ? gambitMaxAmount : undefined,
+        gambit_min_amount: gambitEnabled ? gambitMinAmount : undefined,
+        gambit_min_confidence: gambitEnabled ? gambitMinConfidence : undefined,
+        gambit_max_stop_loss: gambitEnabled ? gambitMaxStopLoss : undefined,
+        gambit_cooling_minutes: gambitEnabled ? gambitCoolingMinutes : undefined,
       }, token)
       
       setMessage({ type: 'success', text: '配置保存成功' })
@@ -337,7 +361,110 @@ export function AnomalyConfigPage() {
               💡 建议新手开启 LLM 决策，专业用户可选关闭以获得更快响应
             </div>
           </div>
-          
+
+          {/* 搏一搏模式 */}
+          <div className="bg-[#0B0E11] border border-[#2B3139] rounded-lg p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-[#EAECEF] mb-2">⚡ 搏一搏模式（高风险）</h2>
+              <button
+                onClick={() => setGambitEnabled(!gambitEnabled)}
+                className={`ml-4 relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
+                  gambitEnabled ? 'bg-blue-500' : 'bg-[#2B3139]'
+                }`}
+              >
+                <span
+                  className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                    gambitEnabled ? 'translate-x-7' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-sm text-[#9CA3AF] mb-4">开启后，在极端行情下允许小仓位高杠杆试探性开仓。请谨慎使用。</p>
+
+            {/* 高级设置折叠 */}
+            <button
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="text-sm text-blue-400 hover:underline mb-3"
+            >
+              {showAdvanced ? '隐藏高级设置' : '显示高级设置'}
+            </button>
+
+            {showAdvanced && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-[#9CA3AF] mb-1">最大仓位比例（%）</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0.01}
+                    max={0.2}
+                    value={gambitMaxPosition}
+                    onChange={(e) => setGambitMaxPosition(Math.max(0.01, Math.min(0.2, Number(e.target.value))))}
+                    className="w-full bg-[#1a1d24] border border-[#2B3139] rounded px-3 py-2 text-[#EAECEF]"
+                  />
+                  <div className="text-xs text-[#6B7280] mt-1">建议 0.01–0.05（1%–5%）</div>
+                </div>
+                <div>
+                  <label className="block text-sm text-[#9CA3AF] mb-1">最大金额（USDT）</label>
+                  <input
+                    type="number"
+                    min={10}
+                    value={gambitMaxAmount}
+                    onChange={(e) => setGambitMaxAmount(Math.max(10, Number(e.target.value)))}
+                    className="w-full bg-[#1a1d24] border border-[#2B3139] rounded px-3 py-2 text-[#EAECEF]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#9CA3AF] mb-1">最小金额（USDT）</label>
+                  <input
+                    type="number"
+                    min={10}
+                    value={gambitMinAmount}
+                    onChange={(e) => setGambitMinAmount(Math.max(10, Number(e.target.value)))}
+                    className="w-full bg-[#1a1d24] border border-[#2B3139] rounded px-3 py-2 text-[#EAECEF]"
+                  />
+                  <div className="text-xs text-[#6B7280] mt-1">低于该值将跳过执行，避免过小单失败</div>
+                </div>
+                <div>
+                  <label className="block text-sm text-[#9CA3AF] mb-1">最小置信度</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={gambitMinConfidence}
+                    onChange={(e) => setGambitMinConfidence(Math.max(0, Math.min(1, Number(e.target.value))))}
+                    className="w-full bg-[#1a1d24] border border-[#2B3139] rounded px-3 py-2 text-[#EAECEF]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#9CA3AF] mb-1">最大止损（%）</label>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={20}
+                    step={0.5}
+                    value={gambitMaxStopLoss * 100}
+                    onChange={(e) => setGambitMaxStopLoss(Math.max(0.005, Math.min(0.2, Number(e.target.value)/100)))}
+                    className="w-full bg-[#1a1d24] border border-[#2B3139] rounded px-3 py-2 text-[#EAECEF]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#9CA3AF] mb-1">冷却期（分钟）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={360}
+                    step={1}
+                    value={gambitCoolingMinutes}
+                    onChange={(e) => setGambitCoolingMinutes(Math.max(0, Math.min(360, Number(e.target.value))))}
+                    className="w-full bg-[#1a1d24] border border-[#2B3139] rounded px-3 py-2 text-[#EAECEF]"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* 拨片 4: 搏一搏模式 */}
           <div className="bg-[#0B0E11] border border-[#2B3139] rounded-lg p-6">
             <div className="mb-4">
