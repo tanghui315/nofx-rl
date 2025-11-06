@@ -5,8 +5,10 @@ import { EquityChart } from './components/EquityChart'
 import { AITradersPage } from './components/AITradersPage'
 import { LoginPage } from './components/LoginPage'
 import { RegisterPage } from './components/RegisterPage'
+import { ResetPasswordPage } from './components/ResetPasswordPage'
 import { CompetitionPage } from './components/CompetitionPage'
 import { LandingPage } from './pages/LandingPage'
+import { FAQPage } from './pages/FAQPage'
 import HeaderBar from './components/landing/HeaderBar'
 import AILearning from './components/AILearning'
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext'
@@ -306,7 +308,17 @@ function App() {
     return <LoginPage />
   }
   if (route === '/register') {
+    if (systemConfig?.admin_mode) {
+      window.history.pushState({}, '', '/login')
+      return <LoginPage />
+    }
     return <RegisterPage />
+  }
+  if (route === '/faq') {
+    return <FAQPage />
+  }
+  if (route === '/reset-password') {
+    return <ResetPasswordPage />
   }
   if (route === '/competition') {
     return (
@@ -341,6 +353,10 @@ function App() {
               window.history.pushState({}, '', '/dashboard')
               setRoute('/dashboard')
               setCurrentPage('trader')
+            } else if (page === 'faq') {
+              console.log('Navigating to faq')
+              window.history.pushState({}, '', '/faq')
+              setRoute('/faq')
             }
 
             console.log(
@@ -360,10 +376,15 @@ function App() {
 
   // Show landing page for root route
   if (route === '/' || route === '') {
-    return <LandingPage />
+    return <LandingPage isAdminMode={systemConfig?.admin_mode} />
   }
 
-  // Show main app for authenticated users on other routes
+  // In admin mode, require authentication for any protected routes
+  if (systemConfig?.admin_mode && (!user || !token)) {
+    return <LoginPage />
+  }
+
+  // Show main app for authenticated users on other routes (non-admin mode)
   if (!systemConfig?.admin_mode && (!user || !token)) {
     // Default to landing page when not authenticated and no specific route
     return <LandingPage />
@@ -397,6 +418,9 @@ function App() {
             window.history.pushState({}, '', '/dashboard')
             setRoute('/dashboard')
             setCurrentPage('trader')
+          } else if (page === 'faq') {
+            window.history.pushState({}, '', '/faq')
+            setRoute('/faq')
           }
         }}
       />
