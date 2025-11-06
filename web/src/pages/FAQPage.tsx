@@ -1,7 +1,7 @@
-import HeaderBar from '../components/landing/HeaderBar'
 import { FAQLayout } from '../components/faq/FAQLayout'
-import { useLanguage } from '../contexts/LanguageContext'
+import HeaderBar from '../components/landing/HeaderBar'
 import { useAuth } from '../contexts/AuthContext'
+import { useLanguage } from '../contexts/LanguageContext'
 import { useSystemConfig } from '../hooks/useSystemConfig'
 import { t } from '../i18n/translations'
 
@@ -52,6 +52,9 @@ export function FAQPage() {
           } else if (page === 'faq') {
             window.history.pushState({}, '', '/faq')
             window.location.href = '/faq'
+          } else if (page === 'anomaly-config') {
+            window.history.pushState({}, '', '/anomaly-config')
+            window.location.href = '/anomaly-config'
           }
         }}
       />

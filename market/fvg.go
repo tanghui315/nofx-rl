@@ -7,7 +7,7 @@ import (
 
 // FVG 检测参数
 const (
-	FVGLookback    = 100  // 回溯100根K线
+	FVGLookback    = 100   // 回溯100根K线
 	MinFVGSize     = 0.005 // 最小0.5%才算有效FVG
 	FVGNearbyRange = 0.02  // 2%范围内算"靠近"
 	MaxFVGsToTrack = 10    // 最多追踪10个FVG
@@ -23,23 +23,23 @@ func DetectFVGs(klines []Kline, currentPrice float64) *FVGAnalysis {
 			Summary:     "Insufficient data for FVG detection",
 		}
 	}
-	
+
 	lookback := FVGLookback
 	if len(klines) < lookback {
 		lookback = len(klines)
 	}
-	
+
 	recentKlines := klines[len(klines)-lookback:]
-	
+
 	var bullishFVGs []FVG
 	var bearishFVGs []FVG
-	
+
 	// 遍历K线，检测FVG（需要连续3根K线）
 	for i := 2; i < len(recentKlines); i++ {
 		k1 := recentKlines[i-2]
 		_ = recentKlines[i-1] // k2 中间K线，用于FVG形成但无需检查
 		k3 := recentKlines[i]
-		
+
 		// 检测看涨FVG：k1高点 < k3低点（k2跳空上涨）
 		if k1.High < k3.Low {
 			fvg := createFVG("bullish", k1.High, k3.Low, i, recentKlines, currentPrice)
@@ -47,7 +47,7 @@ func DetectFVGs(klines []Kline, currentPrice float64) *FVGAnalysis {
 				bullishFVGs = append(bullishFVGs, *fvg)
 			}
 		}
-		
+
 		// 检测看跌FVG：k1低点 > k3高点（k2跳空下跌）
 		if k1.Low > k3.High {
 			fvg := createFVG("bearish", k3.High, k1.Low, i, recentKlines, currentPrice)
@@ -56,11 +56,11 @@ func DetectFVGs(klines []Kline, currentPrice float64) *FVGAnalysis {
 			}
 		}
 	}
-	
+
 	// 只保留最近的N个FVG
 	bullishFVGs = filterRecentFVGs(bullishFVGs, MaxFVGsToTrack)
 	bearishFVGs = filterRecentFVGs(bearishFVGs, MaxFVGsToTrack)
-	
+
 	// 计算回填状态
 	for i := range bullishFVGs {
 		calculateFillStatus(&bullishFVGs[i], currentPrice, recentKlines)
@@ -68,16 +68,16 @@ func DetectFVGs(klines []Kline, currentPrice float64) *FVGAnalysis {
 	for i := range bearishFVGs {
 		calculateFillStatus(&bearishFVGs[i], currentPrice, recentKlines)
 	}
-	
+
 	// 查找最近的未回填FVG
 	nearestBullish := findNearestUnfilledFVG(bullishFVGs, currentPrice)
 	nearestBearish := findNearestUnfilledFVG(bearishFVGs, currentPrice)
-	
+
 	// 生成交易信号
 	signal, targetPrice, confidence, summary := generateFVGSignal(
 		nearestBullish, nearestBearish, currentPrice,
 	)
-	
+
 	return &FVGAnalysis{
 		BullishFVGs:       bullishFVGs,
 		BearishFVGs:       bearishFVGs,
@@ -101,15 +101,15 @@ func createFVG(
 	if lowerBound >= upperBound {
 		return nil
 	}
-	
+
 	size := upperBound - lowerBound
 	midPoint := (upperBound + lowerBound) / 2
 	sizePercent := (size / currentPrice) * 100
 	distancePercent := ((midPoint - currentPrice) / currentPrice) * 100
 	isNearby := math.Abs(distancePercent) <= FVGNearbyRange*100
-	
+
 	createdAt := time.Unix(klines[index].CloseTime/1000, 0)
-	
+
 	return &FVG{
 		Type:            fvgType,
 		UpperBound:      upperBound,
@@ -132,11 +132,11 @@ func calculateFillStatus(fvg *FVG, currentPrice float64, klines []Kline) {
 	if fvg.CreatedIndex >= len(klines)-1 {
 		return
 	}
-	
+
 	subsequentKlines := klines[fvg.CreatedIndex+1:]
-	
+
 	maxPenetration := 0.0
-	
+
 	for _, k := range subsequentKlines {
 		if fvg.Type == "bullish" {
 			// 看涨FVG：检查价格是否回到FVG区域
@@ -166,9 +166,9 @@ func calculateFillStatus(fvg *FVG, currentPrice float64, klines []Kline) {
 			}
 		}
 	}
-	
+
 	fvg.FilledPercent = maxPenetration * 100
-	
+
 	if fvg.FilledPercent >= 100 {
 		fvg.Status = "filled"
 	} else if fvg.FilledPercent > 0 {
@@ -176,7 +176,7 @@ func calculateFillStatus(fvg *FVG, currentPrice float64, klines []Kline) {
 	} else {
 		fvg.Status = "unfilled"
 	}
-	
+
 	// 更新距离当前价格的百分比
 	fvg.DistancePercent = ((fvg.MidPoint - currentPrice) / currentPrice) * 100
 	fvg.IsNearby = math.Abs(fvg.DistancePercent) <= FVGNearbyRange*100
@@ -195,20 +195,20 @@ func filterRecentFVGs(fvgs []FVG, maxCount int) []FVG {
 func findNearestUnfilledFVG(fvgs []FVG, currentPrice float64) *FVG {
 	var nearest *FVG
 	minDistance := math.MaxFloat64
-	
+
 	for i := range fvgs {
 		fvg := &fvgs[i]
 		if fvg.Status == "filled" {
 			continue
 		}
-		
+
 		distance := math.Abs(fvg.MidPoint - currentPrice)
 		if distance < minDistance {
 			minDistance = distance
 			nearest = fvg
 		}
 	}
-	
+
 	return nearest
 }
 
@@ -217,16 +217,16 @@ func generateFVGSignal(
 	nearestBullish, nearestBearish *FVG,
 	currentPrice float64,
 ) (signal string, targetPrice, confidence float64, summary string) {
-	
+
 	// 如果没有FVG
 	if nearestBullish == nil && nearestBearish == nil {
 		return "none", 0, 0, "No significant FVG detected"
 	}
-	
+
 	// 检查最近的看涨FVG（在价格下方）
 	if nearestBullish != nil && nearestBullish.MidPoint < currentPrice {
 		distancePercent := math.Abs(nearestBullish.DistancePercent)
-		
+
 		// 如果FVG在合理距离内（5%以内）
 		if distancePercent <= 5.0 {
 			confidence = calculateFVGConfidence(nearestBullish, distancePercent)
@@ -236,11 +236,11 @@ func generateFVGSignal(
 				formatFVGSummary("bullish", nearestBullish, distancePercent)
 		}
 	}
-	
+
 	// 检查最近的看跌FVG（在价格上方）
 	if nearestBearish != nil && nearestBearish.MidPoint > currentPrice {
 		distancePercent := math.Abs(nearestBearish.DistancePercent)
-		
+
 		// 如果FVG在合理距离内（5%以内）
 		if distancePercent <= 5.0 {
 			confidence = calculateFVGConfidence(nearestBearish, distancePercent)
@@ -250,14 +250,14 @@ func generateFVGSignal(
 				formatFVGSummary("bearish", nearestBearish, distancePercent)
 		}
 	}
-	
+
 	return "none", 0, 0, "FVGs exist but not in tradeable range"
 }
 
 // calculateFVGConfidence 计算FVG信号的信心度
 func calculateFVGConfidence(fvg *FVG, distancePercent float64) float64 {
 	confidence := 70.0 // 基础信心度
-	
+
 	// 1. 距离越近，信心度越高
 	if distancePercent <= 1.0 {
 		confidence += 20.0
@@ -268,24 +268,24 @@ func calculateFVGConfidence(fvg *FVG, distancePercent float64) float64 {
 	} else {
 		confidence += 5.0
 	}
-	
+
 	// 2. FVG越大，信心度越高
 	if fvg.SizePercent >= 1.0 {
 		confidence += 10.0
 	} else if fvg.SizePercent >= 0.5 {
 		confidence += 5.0
 	}
-	
+
 	// 3. 未被回填过，信心度更高
 	if fvg.FilledPercent == 0 {
 		confidence += 5.0
 	}
-	
+
 	// 限制在100以内
 	if confidence > 100 {
 		confidence = 100
 	}
-	
+
 	return confidence
 }
 
@@ -309,4 +309,3 @@ func formatString(format string, args ...interface{}) string {
 	// 为了避免循环导入，这里简单返回
 	return "FVG detected in tradeable range"
 }
-

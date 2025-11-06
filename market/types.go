@@ -15,22 +15,22 @@ type Data struct {
 	FundingRate       float64
 	IntradaySeries    *IntradayData
 	LongerTermContext *LongerTermData
-	
+
 	// 新增技术指标
-	BollingerBands    *BollingerBands  // 布林带
-	ADX               *ADXData         // 趋势强度
-	VWAP              float64          // 成交量加权平均价
-	MultipleEMAs      *MultiEMAData    // 多周期均线
-	Stochastic        *StochasticData  // 随机指标
-	OBV               float64          // 能量潮
-	
+	BollingerBands *BollingerBands // 布林带
+	ADX            *ADXData        // 趋势强度
+	VWAP           float64         // 成交量加权平均价
+	MultipleEMAs   *MultiEMAData   // 多周期均线
+	Stochastic     *StochasticData // 随机指标
+	OBV            float64         // 能量潮
+
 	// 高级功能
-	Divergence        *DivergenceAnalysis // 背离检测
-	FVG               *FVGAnalysis        // Fair Value Gaps
-	Ichimoku          *IchimokuCloud      // 一目均衡表
-	
+	Divergence *DivergenceAnalysis // 背离检测
+	FVG        *FVGAnalysis        // Fair Value Gaps
+	Ichimoku   *IchimokuCloud      // 一目均衡表
+
 	// 语义化分析
-	Semantics         *SemanticAnalysis // 技术分析总结
+	Semantics *SemanticAnalysis // 技术分析总结
 }
 
 // OIData Open Interest数据
@@ -77,18 +77,18 @@ type SymbolInfo struct {
 
 // BollingerBands 布林带指标
 type BollingerBands struct {
-	Upper      float64 // 上轨
-	Middle     float64 // 中轨（SMA）
-	Lower      float64 // 下轨
-	BandWidth  float64 // 带宽 (Upper - Lower) / Middle
-	PercentB   float64 // %B: (Price - Lower) / (Upper - Lower)
+	Upper     float64 // 上轨
+	Middle    float64 // 中轨（SMA）
+	Lower     float64 // 下轨
+	BandWidth float64 // 带宽 (Upper - Lower) / Middle
+	PercentB  float64 // %B: (Price - Lower) / (Upper - Lower)
 }
 
 // ADXData ADX趋势强度指标
 type ADXData struct {
-	ADX       float64 // ADX值
-	PlusDI    float64 // +DI (上升方向指标)
-	MinusDI   float64 // -DI (下降方向指标)
+	ADX     float64 // ADX值
+	PlusDI  float64 // +DI (上升方向指标)
+	MinusDI float64 // -DI (下降方向指标)
 }
 
 // MultiEMAData 多周期EMA
@@ -111,36 +111,36 @@ type StochasticData struct {
 // SemanticAnalysis 语义化技术分析
 type SemanticAnalysis struct {
 	// 趋势分析
-	TrendDirection   string   // "bullish", "bearish", "sideways"
-	TrendStrength    string   // "strong", "moderate", "weak"
-	
+	TrendDirection string // "bullish", "bearish", "sideways"
+	TrendStrength  string // "strong", "moderate", "weak"
+
 	// 动量分析
-	MomentumStatus   string   // "increasing", "decreasing", "neutral"
-	
+	MomentumStatus string // "increasing", "decreasing", "neutral"
+
 	// 波动性
-	VolatilityLevel  string   // "high", "normal", "low"
-	
+	VolatilityLevel string // "high", "normal", "low"
+
 	// 价格位置
-	PricePosition    string   // "overbought", "oversold", "neutral"
-	
+	PricePosition string // "overbought", "oversold", "neutral"
+
 	// 均线状态
-	EMAAlignment     string   // "bullish_alignment", "bearish_alignment", "mixed"
-	
+	EMAAlignment string // "bullish_alignment", "bearish_alignment", "mixed"
+
 	// 关键信号
-	KeySignals       []string // ["golden_cross", "rsi_oversold", "bb_squeeze", etc]
-	
+	KeySignals []string // ["golden_cross", "rsi_oversold", "bb_squeeze", etc]
+
 	// 支撑阻力
-	NearestSupport      float64
-	NearestResistance   float64
-	DistanceToSupport   float64 // 百分比
+	NearestSupport       float64
+	NearestResistance    float64
+	DistanceToSupport    float64 // 百分比
 	DistanceToResistance float64
-	
+
 	// 交易建议
-	TradeSetup       string  // "long", "short", "wait"
-	ConfidenceScore  float64 // 0-100
-	
+	TradeSetup      string  // "long", "short", "wait"
+	ConfidenceScore float64 // 0-100
+
 	// 风险评估
-	RiskLevel        string  // "low", "medium", "high"
+	RiskLevel string // "low", "medium", "high"
 }
 
 type Kline struct {
@@ -269,7 +269,7 @@ type DivergenceAnalysis struct {
 	RSIDivergence  *Divergence // RSI背离
 	MACDDivergence *Divergence // MACD背离
 	OBVDivergence  *Divergence // OBV背离（价量背离）
-	
+
 	// 综合评估
 	Signal     string  // "strong_reversal" / "reversal_warning" / "continuation" / "none"
 	Confidence float64 // 信心度 0-100
@@ -278,19 +278,19 @@ type DivergenceAnalysis struct {
 
 // FVG Fair Value Gap 数据
 type FVG struct {
-	Type        string    // "bullish" / "bearish"
-	UpperBound  float64   // 上边界
-	LowerBound  float64   // 下边界
-	MidPoint    float64   // 中点（50%回填位置）
-	Size        float64   // 大小（绝对值）
-	SizePercent float64   // 大小（百分比）
-	CreatedAt   time.Time // 形成时间
-	CreatedIndex int      // K线索引
-	
+	Type         string    // "bullish" / "bearish"
+	UpperBound   float64   // 上边界
+	LowerBound   float64   // 下边界
+	MidPoint     float64   // 中点（50%回填位置）
+	Size         float64   // 大小（绝对值）
+	SizePercent  float64   // 大小（百分比）
+	CreatedAt    time.Time // 形成时间
+	CreatedIndex int       // K线索引
+
 	// 回填状态
 	FilledPercent float64 // 已回填百分比 0-100
 	Status        string  // "unfilled" / "partial" / "filled"
-	
+
 	// 距离当前价格
 	DistancePercent float64 // 距离当前价格的百分比
 	IsNearby        bool    // 是否靠近当前价格（2%范围内）
@@ -300,16 +300,16 @@ type FVG struct {
 type FVGAnalysis struct {
 	BullishFVGs []FVG // 看涨FVG列表
 	BearishFVGs []FVG // 看跌FVG列表
-	
+
 	// 最近的未回填FVG
 	NearestBullishFVG *FVG
 	NearestBearishFVG *FVG
-	
+
 	// 交易信号
-	Signal        string  // "buy_at_fvg" / "sell_at_fvg" / "none"
-	TargetPrice   float64 // 目标价格（FVG 50%位置）
-	Confidence    float64 // 信心度 0-100
-	Summary       string  // 文字总结
+	Signal      string  // "buy_at_fvg" / "sell_at_fvg" / "none"
+	TargetPrice float64 // 目标价格（FVG 50%位置）
+	Confidence  float64 // 信心度 0-100
+	Summary     string  // 文字总结
 }
 
 // IchimokuCloud 一目均衡表
@@ -320,30 +320,30 @@ type IchimokuCloud struct {
 	SenkouSpanA float64 // 先行带A（当前）
 	SenkouSpanB float64 // 先行带B（当前）
 	ChikouSpan  float64 // 延迟线
-	
+
 	// 未来云边界（预测支撑/阻力）
 	FutureSenkouA float64 // 26期后的Span A
 	FutureSenkouB float64 // 26期后的Span B
-	
+
 	// 云的属性
 	CloudColor     string  // "green" / "red" / "neutral"
 	CloudTop       float64 // 云的上边界
 	CloudBottom    float64 // 云的下边界
 	CloudThickness float64 // 云的厚度（绝对值）
 	CloudPercent   float64 // 云的厚度（百分比）
-	
+
 	// 价格与云的关系
 	PricePosition string  // "above_cloud" / "in_cloud" / "below_cloud"
 	PriceToCloud  float64 // 价格距离云的百分比
-	
+
 	// TK交叉
 	TKCross    string  // "bullish" / "bearish" / "neutral"
 	TKDistance float64 // TK之间的距离（绝对值）
 	TKPercent  float64 // TK之间的距离（百分比）
-	
+
 	// Chikou确认
 	ChikouPosition string // "above_price" / "below_price" / "neutral"
-	
+
 	// 综合信号
 	Signal     string  // "strong_buy" / "buy" / "neutral" / "sell" / "strong_sell"
 	Strength   float64 // 信号强度 0-100

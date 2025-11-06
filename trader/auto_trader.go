@@ -1316,6 +1316,113 @@ func (at *AutoTrader) ClosePosition(symbol, side string, quantity float64) (map[
 	return result, nil
 }
 
+// OpenPosition 开仓（用于异常监控，复用现有执行逻辑）
+func (at *AutoTrader) OpenPosition(symbol, side string, positionSizeUSD float64, leverage int, stopLoss, takeProfit float64) (map[string]interface{}, error) {
+	log.Printf("🔧 异常监控开仓请求: %s %s, 仓位: $%.2f, 杠杆: %dx", symbol, side, positionSizeUSD, leverage)
+	
+	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
+	positions, err := at.trader.GetPositions()
+	if err == nil {
+		for _, pos := range positions {
+			if pos["symbol"] == symbol && pos["side"] == side {
+				return nil, fmt.Errorf("❌ %s 已有%s仓，拒绝开仓以防止仓位叠加超限", symbol, side)
+			}
+		}
+	}
+	
+	// 获取当前价格
+	marketData, err := market.Get(symbol)
+	if err != nil {
+		return nil, fmt.Errorf("获取市场价格失败: %w", err)
+	}
+	
+	// 计算数量
+	quantity := positionSizeUSD / marketData.CurrentPrice
+	
+	// ⚠️ 保证金验证：防止保证金不足错误（code=-2019）
+	requiredMargin := positionSizeUSD / float64(leverage)
+	
+	balance, err := at.trader.GetBalance()
+	if err != nil {
+		return nil, fmt.Errorf("获取账户余额失败: %w", err)
+	}
+	availableBalance := 0.0
+	if avail, ok := balance["availableBalance"].(float64); ok {
+		availableBalance = avail
+	}
+	
+	// 手续费估算（Taker费率 0.04%）
+	estimatedFee := positionSizeUSD * 0.0004
+	totalRequired := requiredMargin + estimatedFee
+	
+	if totalRequired > availableBalance {
+		return nil, fmt.Errorf("❌ 保证金不足: 需要 %.2f USDT（保证金 %.2f + 手续费 %.2f），可用 %.2f USDT",
+			totalRequired, requiredMargin, estimatedFee, availableBalance)
+	}
+	
+	// 设置仓位模式
+	if err := at.trader.SetMarginMode(symbol, at.config.IsCrossMargin); err != nil {
+		log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
+		// 继续执行，不影响交易
+	}
+	
+	// 开仓
+	var order map[string]interface{}
+	if side == "long" {
+		order, err = at.trader.OpenLong(symbol, quantity, leverage)
+	} else if side == "short" {
+		order, err = at.trader.OpenShort(symbol, quantity, leverage)
+	} else {
+		return nil, fmt.Errorf("无效的持仓方向: %s，必须是 'long' 或 'short'", side)
+	}
+	
+	if err != nil {
+		return nil, fmt.Errorf("开仓失败: %w", err)
+	}
+	
+	log.Printf("✓ 异常监控开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
+	
+	// 记录开仓时间
+	posKey := symbol + "_" + side
+	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+	
+	// 设置止损止盈
+	if stopLoss > 0 {
+		sideUpper := strings.ToUpper(side)
+		if err := at.trader.SetStopLoss(symbol, sideUpper, quantity, stopLoss); err != nil {
+			log.Printf("  ⚠ 设置止损失败: %v", err)
+		}
+	}
+	if takeProfit > 0 {
+		sideUpper := strings.ToUpper(side)
+		if err := at.trader.SetTakeProfit(symbol, sideUpper, quantity, takeProfit); err != nil {
+			log.Printf("  ⚠ 设置止盈失败: %v", err)
+		}
+	}
+	
+	return order, nil
+}
+
+// GetBTCETHLeverage 获取BTC/ETH杠杆配置（用于异常监控）
+func (at *AutoTrader) GetBTCETHLeverage() int {
+	return at.config.BTCETHLeverage
+}
+
+// GetAltcoinLeverage 获取山寨币杠杆配置（用于异常监控）
+func (at *AutoTrader) GetAltcoinLeverage() int {
+	return at.config.AltcoinLeverage
+}
+
+// SetLeverage 设置杠杆（用于异常监控）
+func (at *AutoTrader) SetLeverage(symbol string, leverage int) error {
+	return at.trader.SetLeverage(symbol, leverage)
+}
+
+// SetStopLoss 设置止损（用于异常监控）
+func (at *AutoTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+	return at.trader.SetStopLoss(symbol, positionSide, quantity, stopPrice)
+}
+
 // GetPositions 获取持仓列表（用于API）
 func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 	positions, err := at.trader.GetPositions()

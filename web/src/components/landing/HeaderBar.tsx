@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { Menu, X, ChevronDown } from 'lucide-react'
+import { ChevronDown, Menu, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { t, type Language } from '../../i18n/translations'
 
 interface HeaderBarProps {
@@ -257,6 +257,54 @@ export default function HeaderBar({
                     )}
 
                     {t('faqNav', language)}
+                  </button>
+
+                  {/* 异常监控配置 */}
+                  <button
+                    onClick={() => {
+                      console.log('异常监控 button clicked')
+                      onPageChange?.('anomaly-config')
+                    }}
+                    className="text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500"
+                    style={{
+                      color:
+                        currentPage === 'anomaly-config'
+                          ? 'var(--brand-yellow)'
+                          : 'var(--brand-light-gray)',
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      position: 'relative',
+                      background:
+                        currentPage === 'anomaly-config'
+                          ? 'rgba(234, 179, 8, 0.1)'
+                          : 'transparent',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (currentPage !== 'anomaly-config') {
+                        e.currentTarget.style.color = 'var(--brand-yellow)'
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (currentPage !== 'anomaly-config') {
+                        e.currentTarget.style.color = 'var(--brand-light-gray)'
+                      }
+                    }}
+                  >
+                    {currentPage === 'anomaly-config' && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          width: '3px',
+                          height: '60%',
+                          background: 'var(--brand-yellow)',
+                          borderRadius: '0 2px 2px 0',
+                        }}
+                      />
+                    )}
+                    ⚡ 异常监控
                   </button>
                 </>
               ) : (
@@ -768,6 +816,27 @@ export default function HeaderBar({
                 )}
 
                 {t('faqNav', language)}
+              </button>
+              
+              {/* 异常监控配置 */}
+              <button
+                onClick={() => {
+                  console.log('移动端 异常监控 button clicked')
+                  window.history.pushState({}, '', '/anomaly-config')
+                  window.dispatchEvent(new Event('popstate'))
+                  setMobileMenuOpen(false)
+                }}
+                className="block text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500 hover:text-yellow-500"
+                style={{
+                  color: 'var(--brand-light-gray)',
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  position: 'relative',
+                  width: '100%',
+                  textAlign: 'left',
+                }}
+              >
+                ⚡ 异常监控
               </button>
             </>
           )}

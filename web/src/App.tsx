@@ -1,21 +1,22 @@
+import { AlertTriangle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import useSWR from 'swr'
-import { api } from './lib/api'
-import { EquityChart } from './components/EquityChart'
+import AILearning from './components/AILearning'
 import { AITradersPage } from './components/AITradersPage'
+import { CompetitionPage } from './components/CompetitionPage'
+import { EquityChart } from './components/EquityChart'
+import HeaderBar from './components/landing/HeaderBar'
 import { LoginPage } from './components/LoginPage'
 import { RegisterPage } from './components/RegisterPage'
 import { ResetPasswordPage } from './components/ResetPasswordPage'
-import { CompetitionPage } from './components/CompetitionPage'
-import { LandingPage } from './pages/LandingPage'
-import { FAQPage } from './pages/FAQPage'
-import HeaderBar from './components/landing/HeaderBar'
-import AILearning from './components/AILearning'
-import { LanguageProvider, useLanguage } from './contexts/LanguageContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
-import { t, type Language } from './i18n/translations'
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext'
 import { useSystemConfig } from './hooks/useSystemConfig'
-import { AlertTriangle } from 'lucide-react'
+import { t, type Language } from './i18n/translations'
+import { api } from './lib/api'
+import { AnomalyConfigPage } from './pages/AnomalyConfigPage'
+import { FAQPage } from './pages/FAQPage'
+import { LandingPage } from './pages/LandingPage'
 import type {
   AccountInfo,
   DecisionRecord,
@@ -25,7 +26,7 @@ import type {
   TraderInfo,
 } from './types'
 
-type Page = 'competition' | 'traders' | 'trader'
+type Page = 'competition' | 'traders' | 'trader' | 'anomaly-config'
 
 // 平仓按钮组件
 function ClosePositionButton({ 
@@ -130,6 +131,7 @@ function App() {
     const path = window.location.pathname
     const hash = window.location.hash.slice(1) // 去掉 #
 
+    if (path === '/anomaly-config') return 'anomaly-config'
     if (path === '/traders' || hash === 'traders') return 'traders'
     if (path === '/dashboard' || hash === 'trader' || hash === 'details')
       return 'trader'
@@ -146,7 +148,9 @@ function App() {
       const path = window.location.pathname
       const hash = window.location.hash.slice(1)
 
-      if (path === '/traders' || hash === 'traders') {
+      if (path === '/anomaly-config') {
+        setCurrentPage('anomaly-config')
+      } else if (path === '/traders' || hash === 'traders') {
         setCurrentPage('traders')
       } else if (
         path === '/dashboard' ||
@@ -317,6 +321,49 @@ function App() {
   if (route === '/faq') {
     return <FAQPage />
   }
+  if (route === '/anomaly-config') {
+    return (
+      <div
+        className="min-h-screen"
+        style={{ background: '#0B0E11', color: '#EAECEF' }}
+      >
+        <HeaderBar
+          isLoggedIn={!!user}
+          currentPage={currentPage}
+          language={language}
+          onLanguageChange={setLanguage}
+          user={user}
+          onLogout={logout}
+          isAdminMode={systemConfig?.admin_mode}
+          onPageChange={(page) => {
+            if (page === 'competition') {
+              window.history.pushState({}, '', '/competition')
+              setRoute('/competition')
+              setCurrentPage('competition')
+            } else if (page === 'traders') {
+              window.history.pushState({}, '', '/traders')
+              setRoute('/traders')
+              setCurrentPage('traders')
+            } else if (page === 'trader') {
+              window.history.pushState({}, '', '/dashboard')
+              setRoute('/dashboard')
+              setCurrentPage('trader')
+            } else if (page === 'faq') {
+              window.history.pushState({}, '', '/faq')
+              setRoute('/faq')
+            } else if (page === 'anomaly-config') {
+              window.history.pushState({}, '', '/anomaly-config')
+              setRoute('/anomaly-config')
+              setCurrentPage('anomaly-config')
+            }
+          }}
+        />
+        <main className="max-w-[1920px] mx-auto px-6 py-6 pt-24">
+          <AnomalyConfigPage />
+        </main>
+      </div>
+    )
+  }
   if (route === '/reset-password') {
     return <ResetPasswordPage />
   }
@@ -357,6 +404,11 @@ function App() {
               console.log('Navigating to faq')
               window.history.pushState({}, '', '/faq')
               setRoute('/faq')
+            } else if (page === 'anomaly-config') {
+              console.log('Navigating to anomaly-config')
+              window.history.pushState({}, '', '/anomaly-config')
+              setRoute('/anomaly-config')
+              setCurrentPage('anomaly-config')
             }
 
             console.log(
@@ -421,6 +473,10 @@ function App() {
           } else if (page === 'faq') {
             window.history.pushState({}, '', '/faq')
             setRoute('/faq')
+          } else if (page === 'anomaly-config') {
+            window.history.pushState({}, '', '/anomaly-config')
+            setRoute('/anomaly-config')
+            setCurrentPage('anomaly-config')
           }
         }}
       />

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
-import type { AIModel, Exchange, CreateTraderRequest } from '../types'
+import { useEffect, useState } from 'react'
 import { useLanguage } from '../contexts/LanguageContext'
 import { t } from '../i18n/translations'
+import type { AIModel, CreateTraderRequest, Exchange } from '../types'
 
 // 提取下划线后面的名称部分
 function getShortName(fullName: string): string {
@@ -139,14 +139,29 @@ export function TraderConfigModal({
   useEffect(() => {
     const fetchPromptTemplates = async () => {
       try {
-        const response = await fetch('/api/prompt-templates')
+        const token = localStorage.getItem('auth_token')
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        }
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`
+        }
+        
+        const response = await fetch('/api/prompt-templates', {
+          headers,
+        })
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        
         const data = await response.json()
         if (data.templates) {
           setPromptTemplates(data.templates)
         }
       } catch (error) {
         console.error('Failed to fetch prompt templates:', error)
-        // 使用默认模板列表
+        // 使用默认模板列表（fallback）
         setPromptTemplates([{ name: 'default' }, { name: 'aggressive' }])
       }
     }

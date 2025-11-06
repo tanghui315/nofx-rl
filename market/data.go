@@ -76,7 +76,7 @@ func Get(symbol string) (*Data, error) {
 	multipleEMAs := calculateMultipleEMAs(klines4h)
 	stochastic := calculateStochastic(klines3m, 14, 3)
 	obv := calculateOBV(klines3m)
-	
+
 	// 计算高级功能
 	ichimoku := CalculateIchimoku(klines4h, currentPrice)
 	fvgAnalysis := DetectFVGs(klines3m, currentPrice)
@@ -93,24 +93,24 @@ func Get(symbol string) (*Data, error) {
 		FundingRate:       fundingRate,
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
-		
+
 		// 新增指标
-		BollingerBands:    bollingerBands,
-		ADX:               adxData,
-		VWAP:              vwap,
-		MultipleEMAs:      multipleEMAs,
-		Stochastic:        stochastic,
-		OBV:               obv,
-		
+		BollingerBands: bollingerBands,
+		ADX:            adxData,
+		VWAP:           vwap,
+		MultipleEMAs:   multipleEMAs,
+		Stochastic:     stochastic,
+		OBV:            obv,
+
 		// 高级功能
-		Ichimoku:          ichimoku,
-		FVG:               fvgAnalysis,
+		Ichimoku: ichimoku,
+		FVG:      fvgAnalysis,
 	}
 
 	// 计算背离检测（需要在data对象创建后）
 	divergence := AnalyzeDivergence(data, klines3m, klines4h)
 	data.Divergence = divergence
-	
+
 	// 生成语义化分析
 	data.Semantics = AnalyzeSemantics(data)
 
@@ -400,7 +400,7 @@ func Format(data *Data) string {
 
 	// 然后是详细的技术指标数据
 	sb.WriteString("## 📈 Detailed Technical Indicators\n\n")
-	
+
 	sb.WriteString(fmt.Sprintf("**Current Price:** %.2f\n\n", data.CurrentPrice))
 
 	// 布林带
@@ -448,7 +448,7 @@ func Format(data *Data) string {
 	sb.WriteString("**Momentum Indicators:**\n")
 	sb.WriteString(fmt.Sprintf("- MACD: %.3f\n", data.CurrentMACD))
 	sb.WriteString(fmt.Sprintf("- RSI(7): %.1f\n", data.CurrentRSI7))
-	
+
 	// Stochastic
 	if data.Stochastic != nil {
 		sb.WriteString(fmt.Sprintf("- Stochastic %%K: %.1f\n", data.Stochastic.K))
@@ -459,8 +459,8 @@ func Format(data *Data) string {
 	// VWAP
 	if data.VWAP > 0 {
 		vwapDiff := ((data.CurrentPrice - data.VWAP) / data.VWAP) * 100
-		sb.WriteString(fmt.Sprintf("**VWAP:** %.2f (Price is %.2f%% %s VWAP)\n\n", 
-			data.VWAP, math.Abs(vwapDiff), 
+		sb.WriteString(fmt.Sprintf("**VWAP:** %.2f (Price is %.2f%% %s VWAP)\n\n",
+			data.VWAP, math.Abs(vwapDiff),
 			map[bool]string{true: "above", false: "below"}[vwapDiff > 0]))
 	}
 
@@ -525,17 +525,17 @@ func Format(data *Data) string {
 
 	// 高级功能输出
 	sb.WriteString("\n## 🚀 Advanced Technical Analysis\n\n")
-	
+
 	// 1. Ichimoku Cloud
 	if data.Ichimoku != nil {
 		sb.WriteString(formatIchimoku(data.Ichimoku))
 	}
-	
+
 	// 2. Fair Value Gaps
 	if data.FVG != nil {
 		sb.WriteString(formatFVG(data.FVG, data.CurrentPrice))
 	}
-	
+
 	// 3. Divergence Analysis
 	if data.Divergence != nil && data.Divergence.HasDivergence {
 		sb.WriteString(formatDivergence(data.Divergence))
@@ -585,9 +585,9 @@ func parseFloat(v interface{}) (float64, error) {
 // formatIchimoku 格式化Ichimoku Cloud输出
 func formatIchimoku(ichimoku *IchimokuCloud) string {
 	var sb strings.Builder
-	
+
 	sb.WriteString("### ☁️ Ichimoku Cloud Analysis\n\n")
-	
+
 	// 五条线
 	sb.WriteString("**Core Lines:**\n")
 	sb.WriteString(fmt.Sprintf("- Tenkan-sen (Conversion): %.2f\n", ichimoku.Tenkan))
@@ -595,14 +595,14 @@ func formatIchimoku(ichimoku *IchimokuCloud) string {
 	sb.WriteString(fmt.Sprintf("- Senkou Span A: %.2f\n", ichimoku.SenkouSpanA))
 	sb.WriteString(fmt.Sprintf("- Senkou Span B: %.2f\n", ichimoku.SenkouSpanB))
 	sb.WriteString(fmt.Sprintf("- Chikou Span: %.2f\n\n", ichimoku.ChikouSpan))
-	
+
 	// 云的状态
 	sb.WriteString("**Cloud Status:**\n")
 	cloudEmoji := map[string]string{"green": "🟢", "red": "🔴", "neutral": "⚪"}[ichimoku.CloudColor]
 	sb.WriteString(fmt.Sprintf("- Color: %s %s\n", cloudEmoji, strings.ToUpper(ichimoku.CloudColor)))
 	sb.WriteString(fmt.Sprintf("- Thickness: %.2f (%.2f%%)\n", ichimoku.CloudThickness, ichimoku.CloudPercent))
 	sb.WriteString(fmt.Sprintf("- Support: %.2f | Resistance: %.2f\n\n", ichimoku.CloudBottom, ichimoku.CloudTop))
-	
+
 	// 价格位置
 	positionEmoji := map[string]string{
 		"above_cloud": "⬆️",
@@ -610,17 +610,17 @@ func formatIchimoku(ichimoku *IchimokuCloud) string {
 		"below_cloud": "⬇️",
 	}[ichimoku.PricePosition]
 	sb.WriteString("**Price Position:**\n")
-	sb.WriteString(fmt.Sprintf("- %s %s (%.2f%% from cloud)\n\n", 
-		positionEmoji, 
-		strings.ReplaceAll(ichimoku.PricePosition, "_", " "), 
+	sb.WriteString(fmt.Sprintf("- %s %s (%.2f%% from cloud)\n\n",
+		positionEmoji,
+		strings.ReplaceAll(ichimoku.PricePosition, "_", " "),
 		math.Abs(ichimoku.PriceToCloud)))
-	
+
 	// TK交叉
 	tkEmoji := map[string]string{"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}[ichimoku.TKCross]
 	sb.WriteString("**TK Cross:**\n")
 	sb.WriteString(fmt.Sprintf("- Status: %s %s\n", tkEmoji, strings.ToUpper(ichimoku.TKCross)))
 	sb.WriteString(fmt.Sprintf("- Distance: %.2f (%.2f%%)\n\n", math.Abs(ichimoku.TKDistance), ichimoku.TKPercent))
-	
+
 	// 综合信号
 	signalEmoji := map[string]string{
 		"strong_buy":  "🚀",
@@ -633,31 +633,31 @@ func formatIchimoku(ichimoku *IchimokuCloud) string {
 	sb.WriteString(fmt.Sprintf("- %s %s\n", signalEmoji, strings.ToUpper(strings.ReplaceAll(ichimoku.Signal, "_", " "))))
 	sb.WriteString(fmt.Sprintf("- Strength: %.0f/100\n", ichimoku.Strength))
 	sb.WriteString(fmt.Sprintf("- Confidence: %.0f/100\n\n", ichimoku.Confidence))
-	
+
 	return sb.String()
 }
 
 // formatFVG 格式化FVG输出
 func formatFVG(fvg *FVGAnalysis, currentPrice float64) string {
 	var sb strings.Builder
-	
+
 	sb.WriteString("### 📦 Fair Value Gaps (FVG) Analysis\n\n")
-	
-	sb.WriteString(fmt.Sprintf("**Summary:** %d Bullish FVGs, %d Bearish FVGs detected\n\n", 
+
+	sb.WriteString(fmt.Sprintf("**Summary:** %d Bullish FVGs, %d Bearish FVGs detected\n\n",
 		len(fvg.BullishFVGs), len(fvg.BearishFVGs)))
-	
+
 	// 最近的看涨FVG
 	if fvg.NearestBullishFVG != nil {
 		sb.WriteString("**Nearest Bullish FVG:**\n")
 		formatSingleFVG(&sb, fvg.NearestBullishFVG, currentPrice)
 	}
-	
+
 	// 最近的看跌FVG
 	if fvg.NearestBearishFVG != nil {
 		sb.WriteString("**Nearest Bearish FVG:**\n")
 		formatSingleFVG(&sb, fvg.NearestBearishFVG, currentPrice)
 	}
-	
+
 	// 交易信号
 	if fvg.Signal != "none" {
 		signalEmoji := map[string]string{
@@ -670,28 +670,28 @@ func formatFVG(fvg *FVGAnalysis, currentPrice float64) string {
 		sb.WriteString(fmt.Sprintf("- Confidence: %.0f/100\n", fvg.Confidence))
 		sb.WriteString(fmt.Sprintf("- Summary: %s\n", fvg.Summary))
 	}
-	
+
 	sb.WriteString("\n")
 	return sb.String()
 }
 
 // formatSingleFVG 格式化单个FVG
 func formatSingleFVG(sb *strings.Builder, fvg *FVG, currentPrice float64) {
-	sb.WriteString(fmt.Sprintf("- Range: $%.2f - $%.2f (%.2f%% wide)\n", 
+	sb.WriteString(fmt.Sprintf("- Range: $%.2f - $%.2f (%.2f%% wide)\n",
 		fvg.LowerBound, fvg.UpperBound, fvg.SizePercent))
 	sb.WriteString(fmt.Sprintf("- Mid Point: $%.2f\n", fvg.MidPoint))
-	sb.WriteString(fmt.Sprintf("- Distance: %.2f%% %s current price\n", 
+	sb.WriteString(fmt.Sprintf("- Distance: %.2f%% %s current price\n",
 		math.Abs(fvg.DistancePercent),
 		map[bool]string{true: "above", false: "below"}[fvg.MidPoint > currentPrice]))
-	
+
 	statusEmoji := map[string]string{
 		"unfilled": "⚪",
 		"partial":  "🟡",
 		"filled":   "🟢",
 	}[fvg.Status]
-	sb.WriteString(fmt.Sprintf("- Status: %s %s (%.0f%% filled)\n", 
+	sb.WriteString(fmt.Sprintf("- Status: %s %s (%.0f%% filled)\n",
 		statusEmoji, strings.ToUpper(fvg.Status), fvg.FilledPercent))
-	
+
 	if fvg.IsNearby {
 		sb.WriteString("- ⚠️ NEARBY - Price approaching FVG zone\n")
 	}
@@ -701,29 +701,29 @@ func formatSingleFVG(sb *strings.Builder, fvg *FVG, currentPrice float64) {
 // formatDivergence 格式化背离分析输出
 func formatDivergence(divergence *DivergenceAnalysis) string {
 	var sb strings.Builder
-	
+
 	sb.WriteString("### 🔄 Divergence Analysis\n\n")
-	
+
 	sb.WriteString(fmt.Sprintf("**Status:** %s\n\n", divergence.Summary))
-	
+
 	// RSI背离
 	if divergence.RSIDivergence != nil {
 		sb.WriteString("**RSI Divergence:**\n")
 		formatSingleDivergence(&sb, divergence.RSIDivergence)
 	}
-	
+
 	// MACD背离
 	if divergence.MACDDivergence != nil {
 		sb.WriteString("**MACD Divergence:**\n")
 		formatSingleDivergence(&sb, divergence.MACDDivergence)
 	}
-	
+
 	// OBV背离
 	if divergence.OBVDivergence != nil {
 		sb.WriteString("**OBV Divergence (Volume):**\n")
 		formatSingleDivergence(&sb, divergence.OBVDivergence)
 	}
-	
+
 	// 综合信号
 	if divergence.Signal != "none" {
 		signalEmoji := map[string]string{
@@ -735,7 +735,7 @@ func formatDivergence(divergence *DivergenceAnalysis) string {
 		sb.WriteString(fmt.Sprintf("- %s %s\n", signalEmoji, strings.ToUpper(strings.ReplaceAll(divergence.Signal, "_", " "))))
 		sb.WriteString(fmt.Sprintf("- Confidence: %.0f/100\n", divergence.Confidence))
 	}
-	
+
 	sb.WriteString("\n")
 	return sb.String()
 }
@@ -748,10 +748,10 @@ func formatSingleDivergence(sb *strings.Builder, div *Divergence) {
 		"hidden_bullish": "🔵",
 		"hidden_bearish": "🟠",
 	}[div.Type]
-	
+
 	sb.WriteString(fmt.Sprintf("- Type: %s %s\n", typeEmoji, strings.ToUpper(strings.ReplaceAll(div.Type, "_", " "))))
 	sb.WriteString(fmt.Sprintf("- Strength: %.0f/100\n", div.Strength))
 	sb.WriteString(fmt.Sprintf("- Description: %s\n", div.Description))
-	sb.WriteString(fmt.Sprintf("- Price Peaks: %d | Indicator Peaks: %d\n\n", 
+	sb.WriteString(fmt.Sprintf("- Price Peaks: %d | Indicator Peaks: %d\n\n",
 		len(div.PricePeaks), len(div.IndicatorPeaks)))
 }

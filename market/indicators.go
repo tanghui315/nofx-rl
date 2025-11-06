@@ -174,7 +174,7 @@ func calculateStochastic(klines []Kline, kPeriod, dPeriod int) *StochasticData {
 
 	// 计算 %K
 	recentKlines := klines[len(klines)-kPeriod:]
-	
+
 	// 找最高价和最低价
 	highestHigh := recentKlines[0].High
 	lowestLow := recentKlines[0].Low
@@ -231,7 +231,7 @@ func calculateSupportResistance(klines []Kline, currentPrice float64) (support, 
 	// 方法1: 使用Pivot Points
 	lastKline := klines[len(klines)-1]
 	pivot := (lastKline.High + lastKline.Low + lastKline.Close) / 3
-	
+
 	r1 := 2*pivot - lastKline.Low
 	s1 := 2*pivot - lastKline.High
 
@@ -246,4 +246,3 @@ func calculateSupportResistance(klines []Kline, currentPrice float64) (support, 
 
 	return support, resistance
 }
-

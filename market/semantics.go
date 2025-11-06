@@ -129,7 +129,7 @@ func analyzeVolatility(data *Data, analysis *SemanticAnalysis) {
 	// ATR波动性判断
 	atr := data.LongerTermContext.ATR14
 	atr3 := data.LongerTermContext.ATR3
-	
+
 	// 布林带宽度判断
 	bbWidth := data.BollingerBands.BandWidth
 
@@ -191,7 +191,7 @@ func analyzeEMAAlignment(data *Data, analysis *SemanticAnalysis) {
 	}
 
 	emas := data.MultipleEMAs
-	
+
 	// 检查多头排列（短期均线 > 长期均线）
 	bullishCount := 0
 	bearishCount := 0
@@ -234,12 +234,12 @@ func analyzeEMAAlignment(data *Data, analysis *SemanticAnalysis) {
 	if data.LongerTermContext != nil {
 		ema20 := data.LongerTermContext.EMA20
 		ema50 := data.LongerTermContext.EMA50
-		
+
 		// 金叉：EMA20刚穿越EMA50向上
 		if ema20 > ema50 && (ema20-ema50)/ema50 < 0.01 { // 差距小于1%，可能刚交叉
 			analysis.KeySignals = append(analysis.KeySignals, "potential_golden_cross")
 		}
-		
+
 		// 死叉：EMA20刚穿越EMA50向下
 		if ema20 < ema50 && (ema50-ema20)/ema50 < 0.01 {
 			analysis.KeySignals = append(analysis.KeySignals, "potential_death_cross")
@@ -317,12 +317,12 @@ func generateTradeSetup(data *Data, analysis *SemanticAnalysis) {
 
 	// 5. 关键信号加分
 	for _, signal := range analysis.KeySignals {
-		if strings.Contains(signal, "bullish") || strings.Contains(signal, "golden") || 
-		   strings.Contains(signal, "oversold") || strings.Contains(signal, "above_vwap") {
+		if strings.Contains(signal, "bullish") || strings.Contains(signal, "golden") ||
+			strings.Contains(signal, "oversold") || strings.Contains(signal, "above_vwap") {
 			bullishScore++
 		}
-		if strings.Contains(signal, "bearish") || strings.Contains(signal, "death") || 
-		   strings.Contains(signal, "overbought") || strings.Contains(signal, "below_vwap") {
+		if strings.Contains(signal, "bearish") || strings.Contains(signal, "death") ||
+			strings.Contains(signal, "overbought") || strings.Contains(signal, "below_vwap") {
 			bearishScore++
 		}
 	}
@@ -377,7 +377,7 @@ func FormatSemanticAnalysis(data *Data) string {
 	}
 
 	// 动量分析
-	sb.WriteString(fmt.Sprintf("- Momentum: %s (MACD: %.2f, RSI: %.1f)\n", 
+	sb.WriteString(fmt.Sprintf("- Momentum: %s (MACD: %.2f, RSI: %.1f)\n",
 		formatMomentum(s.MomentumStatus), data.CurrentMACD, data.CurrentRSI7))
 
 	// EMA状态
@@ -389,7 +389,7 @@ func FormatSemanticAnalysis(data *Data) string {
 	sb.WriteString("**Price Position:**\n")
 	sb.WriteString(fmt.Sprintf("- Status: %s\n", formatPricePosition(s.PricePosition)))
 	sb.WriteString(fmt.Sprintf("- Volatility: %s\n", s.VolatilityLevel))
-	
+
 	if data.VWAP > 0 {
 		vwapDiff := ((data.CurrentPrice - data.VWAP) / data.VWAP) * 100
 		vwapStatus := "neutral"
@@ -405,10 +405,10 @@ func FormatSemanticAnalysis(data *Data) string {
 
 	// 支撑阻力
 	sb.WriteString("**Support & Resistance:**\n")
-	sb.WriteString(fmt.Sprintf("- Nearest Resistance: %.2f (+%.2f%%)\n", 
+	sb.WriteString(fmt.Sprintf("- Nearest Resistance: %.2f (+%.2f%%)\n",
 		s.NearestResistance, s.DistanceToResistance))
 	sb.WriteString(fmt.Sprintf("- Current Price: %.2f\n", data.CurrentPrice))
-	sb.WriteString(fmt.Sprintf("- Nearest Support: %.2f (-%.2f%%)\n", 
+	sb.WriteString(fmt.Sprintf("- Nearest Support: %.2f (-%.2f%%)\n",
 		s.NearestSupport, s.DistanceToSupport))
 
 	sb.WriteString("\n")
@@ -507,27 +507,27 @@ func formatPricePosition(position string) string {
 
 func formatSignal(signal string) string {
 	signalMap := map[string]string{
-		"strong_bullish_momentum":      "Strong bullish momentum detected",
-		"strong_bearish_momentum":      "Strong bearish momentum detected",
-		"trend_confirmed_by_ema":       "Trend confirmed by EMA crossover",
-		"strong_positive_macd":         "MACD showing strong positive momentum",
-		"strong_negative_macd":         "MACD showing strong negative momentum",
-		"momentum_overbought_warning":  "Momentum overbought - potential reversal",
+		"strong_bullish_momentum":       "Strong bullish momentum detected",
+		"strong_bearish_momentum":       "Strong bearish momentum detected",
+		"trend_confirmed_by_ema":        "Trend confirmed by EMA crossover",
+		"strong_positive_macd":          "MACD showing strong positive momentum",
+		"strong_negative_macd":          "MACD showing strong negative momentum",
+		"momentum_overbought_warning":   "Momentum overbought - potential reversal",
 		"momentum_oversold_opportunity": "Momentum oversold - potential bounce",
-		"high_volatility":              "High volatility detected",
-		"low_volatility_squeeze":       "Low volatility - potential breakout setup",
-		"rsi_overbought":               "RSI overbought (>70)",
-		"rsi_oversold":                 "RSI oversold (<30)",
-		"price_near_bb_upper":          "Price testing Bollinger upper band",
-		"price_near_bb_lower":          "Price testing Bollinger lower band",
-		"price_above_vwap":             "Price trading above VWAP (bullish)",
-		"price_below_vwap":             "Price trading below VWAP (bearish)",
-		"bullish_ema_alignment":        "Bullish EMA alignment confirmed",
-		"bearish_ema_alignment":        "Bearish EMA alignment confirmed",
-		"potential_golden_cross":       "Potential Golden Cross forming",
-		"potential_death_cross":        "Potential Death Cross forming",
-		"approaching_resistance":       "Approaching resistance level",
-		"approaching_support":          "Approaching support level",
+		"high_volatility":               "High volatility detected",
+		"low_volatility_squeeze":        "Low volatility - potential breakout setup",
+		"rsi_overbought":                "RSI overbought (>70)",
+		"rsi_oversold":                  "RSI oversold (<30)",
+		"price_near_bb_upper":           "Price testing Bollinger upper band",
+		"price_near_bb_lower":           "Price testing Bollinger lower band",
+		"price_above_vwap":              "Price trading above VWAP (bullish)",
+		"price_below_vwap":              "Price trading below VWAP (bearish)",
+		"bullish_ema_alignment":         "Bullish EMA alignment confirmed",
+		"bearish_ema_alignment":         "Bearish EMA alignment confirmed",
+		"potential_golden_cross":        "Potential Golden Cross forming",
+		"potential_death_cross":         "Potential Death Cross forming",
+		"approaching_resistance":        "Approaching resistance level",
+		"approaching_support":           "Approaching support level",
 	}
 
 	if formatted, ok := signalMap[signal]; ok {
@@ -546,12 +546,12 @@ func analyzeAdvancedFeatures(data *Data, analysis *SemanticAnalysis) {
 	if data.Ichimoku != nil {
 		analyzeIchimokuSignals(data.Ichimoku, analysis)
 	}
-	
+
 	// 2. FVG 分析
 	if data.FVG != nil {
 		analyzeFVGSignals(data.FVG, analysis)
 	}
-	
+
 	// 3. Divergence 分析
 	if data.Divergence != nil && data.Divergence.HasDivergence {
 		analyzeDivergenceSignals(data.Divergence, analysis)
@@ -570,14 +570,14 @@ func analyzeIchimokuSignals(ichimoku *IchimokuCloud, analysis *SemanticAnalysis)
 			analysis.KeySignals = append(analysis.KeySignals, "ichimoku_bearish_cloud")
 		}
 	}
-	
+
 	// TK交叉信号
 	if ichimoku.TKCross == "bullish" && ichimoku.TKPercent > 0.3 {
 		analysis.KeySignals = append(analysis.KeySignals, "ichimoku_tk_golden_cross")
 	} else if ichimoku.TKCross == "bearish" && ichimoku.TKPercent > 0.3 {
 		analysis.KeySignals = append(analysis.KeySignals, "ichimoku_tk_death_cross")
 	}
-	
+
 	// 厚云提供强支撑/阻力
 	if ichimoku.CloudPercent > 1.5 {
 		if ichimoku.PricePosition == "above_cloud" {
@@ -596,14 +596,14 @@ func analyzeFVGSignals(fvg *FVGAnalysis, analysis *SemanticAnalysis) {
 			analysis.KeySignals = append(analysis.KeySignals, "fvg_bullish_nearby")
 		}
 	}
-	
+
 	// 检查最近的看跌FVG
 	if fvg.NearestBearishFVG != nil && fvg.NearestBearishFVG.IsNearby {
 		if fvg.NearestBearishFVG.Status == "unfilled" {
 			analysis.KeySignals = append(analysis.KeySignals, "fvg_bearish_nearby")
 		}
 	}
-	
+
 	// FVG交易信号
 	if fvg.Signal == "buy_at_fvg" {
 		analysis.KeySignals = append(analysis.KeySignals, "fvg_buy_opportunity")
@@ -622,7 +622,7 @@ func analyzeDivergenceSignals(divergence *DivergenceAnalysis, analysis *Semantic
 			analysis.KeySignals = append(analysis.KeySignals, "rsi_bullish_divergence")
 		}
 	}
-	
+
 	// MACD背离
 	if divergence.MACDDivergence != nil {
 		if divergence.MACDDivergence.Type == "bearish" {
@@ -631,7 +631,7 @@ func analyzeDivergenceSignals(divergence *DivergenceAnalysis, analysis *Semantic
 			analysis.KeySignals = append(analysis.KeySignals, "macd_bullish_divergence")
 		}
 	}
-	
+
 	// 综合背离警告
 	if divergence.Signal == "strong_reversal" {
 		analysis.KeySignals = append(analysis.KeySignals, "strong_reversal_warning")
@@ -639,4 +639,3 @@ func analyzeDivergenceSignals(divergence *DivergenceAnalysis, analysis *Semantic
 		analysis.KeySignals = append(analysis.KeySignals, "reversal_warning")
 	}
 }
-

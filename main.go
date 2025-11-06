@@ -7,8 +7,10 @@ import (
 	"nofx/api"
 	"nofx/auth"
 	"nofx/config"
+	"nofx/decision"
 	"nofx/manager"
 	"nofx/market"
+	"nofx/mcp"
 	"nofx/pool"
 	"os"
 	"os/signal"
@@ -328,7 +330,71 @@ func main() {
 	}()
 
 	// 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
-	go market.NewWSMonitor(150).Start(database.GetCustomCoins())
+	wsMonitor := market.NewWSMonitor(150)
+	
+	// 加载并启用异常监控配置
+	anomalyConfig, err := config.LoadAnomalyConfig(database)
+	if err != nil {
+		log.Printf("⚠️  加载异常监控配置失败: %v", err)
+	} else if anomalyConfig.IsEnabled() {
+		// 启用异常监控
+            wsMonitor.EnableAnomalyDetection(
+                anomalyConfig.GetPriceThreshold(),
+                anomalyConfig.GetVolumeMultiplier(),
+                anomalyConfig.GetConsecutiveThreshold(),
+                anomalyConfig.GetMinVolumeUSDT(),
+                anomalyConfig.GetCoolingPeriodMinutes(),
+                anomalyConfig.GetAbsMinPriceChangePct(),
+                anomalyConfig.GetCoolingPeriodMinutes(), // 动作冷却与检测冷却一致，后续可独立配置
+            )
+		log.Printf("✅ 异常监控配置：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
+		
+		// 设置异常监控配置（避免导入循环）
+		wsMonitor.SetAnomalyConfig(anomalyConfig)
+		
+		// 设置依赖（Phase 3）
+		// 加载 AI 模型配置（使用 default 用户的第一个启用的模型）
+		var aiModelConfig *config.AIModelConfig
+		aiModels, err := database.GetAIModels("default")
+		if err == nil && len(aiModels) > 0 {
+			// 找到第一个启用的模型
+			for _, model := range aiModels {
+				if model.Enabled {
+					aiModelConfig = model
+					break
+				}
+			}
+		}
+		
+		// 创建 MCP 客户端
+		mcpClient := mcp.New()
+		if aiModelConfig != nil {
+			// 根据模型类型配置 MCP 客户端
+			if aiModelConfig.Provider == "deepseek" {
+				mcpClient.SetDeepSeekAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
+			} else if aiModelConfig.Provider == "qwen" {
+				mcpClient.SetQwenAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
+			} else if aiModelConfig.Provider == "custom" {
+				mcpClient.SetCustomAPI(aiModelConfig.CustomAPIURL, aiModelConfig.APIKey, aiModelConfig.CustomModelName)
+			}
+		}
+		
+		// 设置依赖
+		wsMonitor.SetDependencies(traderManager, aiModelConfig, mcpClient)
+		
+		// 创建并设置 LLM 评估器适配器（解决导入循环问题）
+		if aiModelConfig != nil && anomalyConfig.GetUseLLM() {
+			evaluatorAdapter := decision.NewAnomalyEvaluatorAdapter(mcpClient)
+			wsMonitor.SetLLMEvaluator(evaluatorAdapter)
+			log.Printf("✅ LLM评估器已设置（使用 %s 模型）", aiModelConfig.Provider)
+		} else {
+			log.Printf("💡 LLM评估器未设置（AI模型未配置或LLM未启用）")
+		}
+	} else {
+		log.Printf("⏸️  异常监控已禁用（模式：%s）", anomalyConfig.Mode)
+	}
+	
+	go wsMonitor.Start(database.GetCustomCoins())
 	//go market.NewWSMonitor(150).Start([]string{}) //这里是一个使用方式 传入空的话 则使用market市场的所有币种
 	// 设置优雅退出
 	sigChan := make(chan os.Signal, 1)

@@ -150,6 +150,23 @@ func (s *Server) setupRoutes() {
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
 			protected.GET("/performance", s.handlePerformance)
+			protected.GET("/equity-history", s.handleEquityHistory) // 收益率历史数据（管理员模式下需要认证）
+			protected.POST("/equity-history-batch", s.handleEquityHistoryBatch) // 批量获取历史数据
+			
+			// 系统提示词模板管理（管理员模式下需要认证）
+			protected.GET("/prompt-templates", s.handleGetPromptTemplates)
+			protected.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
+			
+			// 竞赛数据（管理员模式下需要认证）
+			protected.GET("/competition", s.handlePublicCompetition)
+			protected.GET("/traders", s.handlePublicTraderList)
+			protected.GET("/top-traders", s.handleTopTraders)
+			protected.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
+			
+			// 异常监控配置
+			protected.GET("/anomaly/config", s.handleGetAnomalyConfig)
+			protected.PUT("/anomaly/config", s.handleUpdateAnomalyConfig)
+			protected.GET("/anomaly/status", s.handleGetAnomalyStatus)
 		}
 	}
 }
@@ -2222,4 +2239,144 @@ func (s *Server) handleGetPublicTraderConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// handleGetAnomalyConfig 获取异常监控配置
+func (s *Server) handleGetAnomalyConfig(c *gin.Context) {
+	anomalyConfig, err := config.LoadAnomalyConfig(s.database)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("加载配置失败: %v", err),
+		})
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{
+		"mode":           anomalyConfig.Mode,
+		"sensitivity":    anomalyConfig.Sensitivity,
+		"use_llm":        anomalyConfig.UseLLM,
+		"gambit_enabled": anomalyConfig.GambitEnabled,
+		"is_enabled":     anomalyConfig.IsEnabled(),
+		"can_take_action": anomalyConfig.ShouldTakeAction(),
+		"gambit_config":  anomalyConfig.GetGambitConfig(),
+	})
+}
+
+// handleUpdateAnomalyConfig 更新异常监控配置
+func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
+	var req struct {
+		Mode          string `json:"mode"`
+		Sensitivity   string `json:"sensitivity"`
+		UseLLM        *bool  `json:"use_llm"`
+		GambitEnabled *bool  `json:"gambit_enabled"`
+	}
+	
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+	
+	validModes := map[string]bool{
+		"off": true, "watch": true, "guard": true, "balanced": true, "aggressive": true,
+	}
+	validSensitivities := map[string]bool{
+		"low": true, "medium": true, "high": true,
+	}
+	
+	if req.Mode != "" && !validModes[req.Mode] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的模式"})
+		return
+	}
+	
+	if req.Sensitivity != "" && !validSensitivities[req.Sensitivity] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的灵敏度"})
+		return
+	}
+	
+	if req.Mode != "" {
+		if err := s.database.SetSystemConfig("anomaly_mode", req.Mode); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新模式失败"})
+			return
+		}
+	}
+	
+	if req.Sensitivity != "" {
+		if err := s.database.SetSystemConfig("anomaly_sensitivity", req.Sensitivity); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新灵敏度失败"})
+			return
+		}
+	}
+	
+	if req.UseLLM != nil {
+		value := "false"
+		if *req.UseLLM {
+			value = "true"
+		}
+		if err := s.database.SetSystemConfig("anomaly_use_llm", value); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新LLM配置失败"})
+			return
+		}
+	}
+	
+	if req.GambitEnabled != nil {
+		value := "false"
+		if *req.GambitEnabled {
+			value = "true"
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_enabled", value); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新搏一搏配置失败"})
+			return
+		}
+	}
+	
+	anomalyConfig, err := config.LoadAnomalyConfig(s.database)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重新加载配置失败"})
+		return
+	}
+	
+	log.Printf("✅ 异常监控配置已更新：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
+	
+	c.JSON(http.StatusOK, gin.H{
+		"message": "配置更新成功",
+		"config": gin.H{
+			"mode":           anomalyConfig.Mode,
+			"sensitivity":    anomalyConfig.Sensitivity,
+			"use_llm":        anomalyConfig.UseLLM,
+			"gambit_enabled": anomalyConfig.GambitEnabled,
+		},
+	})
+}
+
+// handleGetAnomalyStatus 获取异常监控状态
+func (s *Server) handleGetAnomalyStatus(c *gin.Context) {
+	anomalyConfig, err := config.LoadAnomalyConfig(s.database)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("加载配置失败: %v", err),
+		})
+		return
+	}
+	
+	descriptions := map[string]string{
+		"off":        "异常监控已关闭",
+		"watch":      "观察模式：只提醒不操作",
+		"guard":      "防守模式：自动减仓止损，不追涨",
+		"balanced":   "平衡模式：可追涨杀跌，小仓位试探",
+		"aggressive": "激进模式：快速响应，加大仓位",
+	}
+	
+	description := descriptions[string(anomalyConfig.Mode)]
+	if description == "" {
+		description = "未知模式"
+	}
+	
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":        anomalyConfig.IsEnabled(),
+		"mode":           anomalyConfig.Mode,
+		"sensitivity":    anomalyConfig.Sensitivity,
+		"use_llm":        anomalyConfig.UseLLM,
+		"gambit_enabled": anomalyConfig.GambitEnabled,
+		"description":    description,
+	})
 }

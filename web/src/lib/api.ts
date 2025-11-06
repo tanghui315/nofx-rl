@@ -1,16 +1,16 @@
 import type {
-  SystemStatus,
-  AccountInfo,
-  Position,
-  DecisionRecord,
-  Statistics,
-  TraderInfo,
-  AIModel,
-  Exchange,
-  CreateTraderRequest,
-  UpdateModelConfigRequest,
-  UpdateExchangeConfigRequest,
-  CompetitionData,
+    AccountInfo,
+    AIModel,
+    CompetitionData,
+    CreateTraderRequest,
+    DecisionRecord,
+    Exchange,
+    Position,
+    Statistics,
+    SystemStatus,
+    TraderInfo,
+    UpdateExchangeConfigRequest,
+    UpdateModelConfigRequest,
 } from '../types'
 
 const API_BASE = '/api'
@@ -284,11 +284,12 @@ export const api = {
     return res.json()
   },
 
-  // 批量获取多个交易员的历史数据（无需认证）
+  // 批量获取多个交易员的历史数据
   async getEquityHistoryBatch(traderIds: string[]): Promise<any> {
     const res = await fetch(`${API_BASE}/equity-history-batch`, {
       method: 'POST',
       headers: {
+        ...getAuthHeaders(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ trader_ids: traderIds }),
@@ -323,9 +324,11 @@ export const api = {
     return res.json()
   },
 
-  // 获取竞赛数据（无需认证）
+  // 获取竞赛数据
   async getCompetition(): Promise<CompetitionData> {
-    const res = await fetch(`${API_BASE}/competition`)
+    const res = await fetch(`${API_BASE}/competition`, {
+      headers: getAuthHeaders(),
+    })
     if (!res.ok) throw new Error('获取竞赛数据失败')
     return res.json()
   },
@@ -367,5 +370,51 @@ export const api = {
     })
     if (!res.ok) throw new Error('获取服务器IP失败')
     return res.json()
+  },
+
+  // 通用GET方法，支持传递token
+  async get(endpoint: string, token?: string | null): Promise<any> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    const res = await fetch(`${API_BASE}${endpoint}`, { headers })
+    if (!res.ok) throw new Error(`GET ${endpoint} failed`)
+    return res.json()
+  },
+
+  // 通用PUT方法，支持传递token
+  async put(endpoint: string, data: any, token?: string | null): Promise<any> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      throw { response: { data: error } }
+    }
+    return res.json()
+  },
+
+  // 异常监控配置
+  async getAnomalyConfig(token?: string | null): Promise<any> {
+    return this.get('/anomaly/config', token)
+  },
+
+  async updateAnomalyConfig(data: any, token?: string | null): Promise<any> {
+    return this.put('/anomaly/config', data, token)
+  },
+
+  async getAnomalyStatus(token?: string | null): Promise<any> {
+    return this.get('/anomaly/status', token)
   },
 }

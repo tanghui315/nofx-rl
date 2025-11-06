@@ -269,6 +269,19 @@ func (d *Database) initDefaultData() error {
 		"btc_eth_leverage":     "5",                                                                                   // BTC/ETH杠杆倍数
 		"altcoin_leverage":     "5",                                                                                   // 山寨币杠杆倍数
 		"jwt_secret":           "",                                                                                    // JWT密钥，默认为空，由config.json或系统生成
+		
+		// 异常监控配置（3个核心拨片）
+		"anomaly_mode":        "watch",  // 异常监控模式：off/watch/guard/balanced/aggressive，默认观察模式
+		"anomaly_sensitivity": "medium", // 灵敏度：low/medium/high，默认中等
+		"anomaly_use_llm":     "false",  // 是否使用LLM决策，默认关闭
+		
+		// 搏一搏配置
+		"anomaly_gambit_enabled":       "false", // 搏一搏模式开关，默认关闭
+		"anomaly_gambit_max_position":  "0.02",  // 搏一搏最大仓位百分比（2%）
+		"anomaly_gambit_max_amount":    "5000",  // 搏一搏最大绝对金额（$5,000）
+		"anomaly_gambit_min_confidence": "0.8",   // 搏一搏最小置信度（80%）
+		"anomaly_gambit_max_stop_loss":  "0.03",  // 搏一搏最大止损（3%）
+		"anomaly_gambit_cooling_minutes": "60",    // 搏一搏冷却期（60分钟）
 	}
 
 	for key, value := range systemConfigs {

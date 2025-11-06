@@ -22,27 +22,27 @@ func AnalyzeDivergence(data *Data, klines3m, klines4h []Kline) *DivergenceAnalys
 			Summary:       "Insufficient data for divergence analysis",
 		}
 	}
-	
+
 	// 使用4小时K线检测背离（更可靠）
 	recentKlines := klines4h
 	if len(recentKlines) > DivergenceLookback {
 		recentKlines = klines4h[len(klines4h)-DivergenceLookback:]
 	}
-	
+
 	// 1. 检测RSI背离
 	rsiDivergence := detectRSIDivergence(recentKlines, data.LongerTermContext.RSI14Values)
-	
+
 	// 2. 检测MACD背离
 	macdDivergence := detectMACDDivergence(recentKlines, data.LongerTermContext.MACDValues)
-	
+
 	// 3. 检测OBV背离（价量背离）
 	obvDivergence := detectOBVDivergence(recentKlines, data.OBV)
-	
+
 	// 综合评估
 	hasDivergence := (rsiDivergence != nil) || (macdDivergence != nil) || (obvDivergence != nil)
 	signal, confidence := evaluateDivergenceSignal(rsiDivergence, macdDivergence, obvDivergence)
 	summary := generateDivergenceSummary(rsiDivergence, macdDivergence, obvDivergence)
-	
+
 	return &DivergenceAnalysis{
 		HasDivergence:  hasDivergence,
 		RSIDivergence:  rsiDivergence,
@@ -59,28 +59,28 @@ func detectRSIDivergence(klines []Kline, rsiValues []float64) *Divergence {
 	if len(klines) < 10 || len(rsiValues) < 10 {
 		return nil
 	}
-	
+
 	// 确保数据长度一致
 	minLen := len(klines)
 	if len(rsiValues) < minLen {
 		minLen = len(rsiValues)
 	}
-	
+
 	klines = klines[len(klines)-minLen:]
 	rsiValues = rsiValues[len(rsiValues)-minLen:]
-	
+
 	// 查找价格峰值
 	pricePeaks := findPricePeaks(klines, MinPeakDistance)
 	if len(pricePeaks) < 2 {
 		return nil
 	}
-	
+
 	// 查找RSI峰值
 	rsiPeaks := findIndicatorPeaks(rsiValues, MinPeakDistance, klines)
 	if len(rsiPeaks) < 2 {
 		return nil
 	}
-	
+
 	// 比较最近的两个峰值
 	return comparePeaksForDivergence(pricePeaks, rsiPeaks, "RSI")
 }
@@ -90,25 +90,25 @@ func detectMACDDivergence(klines []Kline, macdValues []float64) *Divergence {
 	if len(klines) < 10 || len(macdValues) < 10 {
 		return nil
 	}
-	
+
 	minLen := len(klines)
 	if len(macdValues) < minLen {
 		minLen = len(macdValues)
 	}
-	
+
 	klines = klines[len(klines)-minLen:]
 	macdValues = macdValues[len(macdValues)-minLen:]
-	
+
 	pricePeaks := findPricePeaks(klines, MinPeakDistance)
 	if len(pricePeaks) < 2 {
 		return nil
 	}
-	
+
 	macdPeaks := findIndicatorPeaks(macdValues, MinPeakDistance, klines)
 	if len(macdPeaks) < 2 {
 		return nil
 	}
-	
+
 	return comparePeaksForDivergence(pricePeaks, macdPeaks, "MACD")
 }
 
@@ -124,12 +124,12 @@ func findPricePeaks(klines []Kline, minDistance int) []Peak {
 	if len(klines) < minDistance*2+1 {
 		return nil
 	}
-	
+
 	var peaks []Peak
-	
+
 	for i := minDistance; i < len(klines)-minDistance; i++ {
 		current := klines[i]
-		
+
 		// 检查是否是局部最高点
 		isHigh := true
 		for j := i - minDistance; j <= i+minDistance; j++ {
@@ -138,7 +138,7 @@ func findPricePeaks(klines []Kline, minDistance int) []Peak {
 				break
 			}
 		}
-		
+
 		if isHigh {
 			peaks = append(peaks, Peak{
 				Index: i,
@@ -148,7 +148,7 @@ func findPricePeaks(klines []Kline, minDistance int) []Peak {
 			})
 			continue
 		}
-		
+
 		// 检查是否是局部最低点
 		isLow := true
 		for j := i - minDistance; j <= i+minDistance; j++ {
@@ -157,7 +157,7 @@ func findPricePeaks(klines []Kline, minDistance int) []Peak {
 				break
 			}
 		}
-		
+
 		if isLow {
 			peaks = append(peaks, Peak{
 				Index: i,
@@ -167,7 +167,7 @@ func findPricePeaks(klines []Kline, minDistance int) []Peak {
 			})
 		}
 	}
-	
+
 	return peaks
 }
 
@@ -176,12 +176,12 @@ func findIndicatorPeaks(values []float64, minDistance int, klines []Kline) []Pea
 	if len(values) < minDistance*2+1 {
 		return nil
 	}
-	
+
 	var peaks []Peak
-	
+
 	for i := minDistance; i < len(values)-minDistance; i++ {
 		current := values[i]
-		
+
 		// 检查是否是局部最高点
 		isHigh := true
 		for j := i - minDistance; j <= i+minDistance; j++ {
@@ -190,7 +190,7 @@ func findIndicatorPeaks(values []float64, minDistance int, klines []Kline) []Pea
 				break
 			}
 		}
-		
+
 		if isHigh {
 			peakTime := time.Now()
 			if i < len(klines) {
@@ -204,7 +204,7 @@ func findIndicatorPeaks(values []float64, minDistance int, klines []Kline) []Pea
 			})
 			continue
 		}
-		
+
 		// 检查是否是局部最低点
 		isLow := true
 		for j := i - minDistance; j <= i+minDistance; j++ {
@@ -213,7 +213,7 @@ func findIndicatorPeaks(values []float64, minDistance int, klines []Kline) []Pea
 				break
 			}
 		}
-		
+
 		if isLow {
 			peakTime := time.Now()
 			if i < len(klines) {
@@ -227,7 +227,7 @@ func findIndicatorPeaks(values []float64, minDistance int, klines []Kline) []Pea
 			})
 		}
 	}
-	
+
 	return peaks
 }
 
@@ -236,32 +236,32 @@ func comparePeaksForDivergence(pricePeaks, indicatorPeaks []Peak, indicator stri
 	if len(pricePeaks) < 2 || len(indicatorPeaks) < 2 {
 		return nil
 	}
-	
+
 	// 获取最近的两个高点
 	var recentPriceHighs []Peak
 	var recentIndicatorHighs []Peak
-	
+
 	for i := len(pricePeaks) - 1; i >= 0 && len(recentPriceHighs) < 2; i-- {
 		if pricePeaks[i].Type == "high" {
 			recentPriceHighs = append([]Peak{pricePeaks[i]}, recentPriceHighs...)
 		}
 	}
-	
+
 	for i := len(indicatorPeaks) - 1; i >= 0 && len(recentIndicatorHighs) < 2; i-- {
 		if indicatorPeaks[i].Type == "high" {
 			recentIndicatorHighs = append([]Peak{indicatorPeaks[i]}, recentIndicatorHighs...)
 		}
 	}
-	
+
 	// 检测看跌背离：价格更高，指标更低
 	if len(recentPriceHighs) >= 2 && len(recentIndicatorHighs) >= 2 {
 		priceChange := (recentPriceHighs[1].Value - recentPriceHighs[0].Value) / recentPriceHighs[0].Value
 		indicatorChange := (recentIndicatorHighs[1].Value - recentIndicatorHighs[0].Value) / recentIndicatorHighs[0].Value
-		
+
 		// 价格上涨但指标下降 = 看跌背离
 		if priceChange > DivergenceThreshold && indicatorChange < -DivergenceThreshold {
 			strength := math.Min((math.Abs(priceChange)+math.Abs(indicatorChange))*100, 100)
-			
+
 			return &Divergence{
 				Type:           "bearish",
 				Indicator:      indicator,
@@ -273,32 +273,32 @@ func comparePeaksForDivergence(pricePeaks, indicatorPeaks []Peak, indicator stri
 			}
 		}
 	}
-	
+
 	// 获取最近的两个低点
 	var recentPriceLows []Peak
 	var recentIndicatorLows []Peak
-	
+
 	for i := len(pricePeaks) - 1; i >= 0 && len(recentPriceLows) < 2; i-- {
 		if pricePeaks[i].Type == "low" {
 			recentPriceLows = append([]Peak{pricePeaks[i]}, recentPriceLows...)
 		}
 	}
-	
+
 	for i := len(indicatorPeaks) - 1; i >= 0 && len(recentIndicatorLows) < 2; i-- {
 		if indicatorPeaks[i].Type == "low" {
 			recentIndicatorLows = append([]Peak{indicatorPeaks[i]}, recentIndicatorLows...)
 		}
 	}
-	
+
 	// 检测看涨背离：价格更低，指标更高
 	if len(recentPriceLows) >= 2 && len(recentIndicatorLows) >= 2 {
 		priceChange := (recentPriceLows[1].Value - recentPriceLows[0].Value) / recentPriceLows[0].Value
 		indicatorChange := (recentIndicatorLows[1].Value - recentIndicatorLows[0].Value) / math.Abs(recentIndicatorLows[0].Value)
-		
+
 		// 价格下跌但指标上升 = 看涨背离
 		if priceChange < -DivergenceThreshold && indicatorChange > DivergenceThreshold {
 			strength := math.Min((math.Abs(priceChange)+math.Abs(indicatorChange))*100, 100)
-			
+
 			return &Divergence{
 				Type:           "bullish",
 				Indicator:      indicator,
@@ -310,7 +310,7 @@ func comparePeaksForDivergence(pricePeaks, indicatorPeaks []Peak, indicator stri
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -319,12 +319,12 @@ func evaluateDivergenceSignal(rsi, macd, obv *Divergence) (signal string, confid
 	if rsi == nil && macd == nil && obv == nil {
 		return "none", 0
 	}
-	
+
 	bearishCount := 0
 	bullishCount := 0
 	totalStrength := 0.0
 	count := 0
-	
+
 	if rsi != nil {
 		if rsi.Type == "bearish" {
 			bearishCount++
@@ -334,7 +334,7 @@ func evaluateDivergenceSignal(rsi, macd, obv *Divergence) (signal string, confid
 		totalStrength += rsi.Strength
 		count++
 	}
-	
+
 	if macd != nil {
 		if macd.Type == "bearish" {
 			bearishCount++
@@ -344,7 +344,7 @@ func evaluateDivergenceSignal(rsi, macd, obv *Divergence) (signal string, confid
 		totalStrength += macd.Strength
 		count++
 	}
-	
+
 	if obv != nil {
 		if obv.Type == "bearish" {
 			bearishCount++
@@ -354,9 +354,9 @@ func evaluateDivergenceSignal(rsi, macd, obv *Divergence) (signal string, confid
 		totalStrength += obv.Strength
 		count++
 	}
-	
+
 	avgStrength := totalStrength / float64(count)
-	
+
 	// 多个指标确认
 	if bearishCount >= 2 {
 		return "strong_reversal", math.Min(avgStrength+20, 100)
@@ -367,7 +367,7 @@ func evaluateDivergenceSignal(rsi, macd, obv *Divergence) (signal string, confid
 	} else if bullishCount == 1 {
 		return "reversal_warning", avgStrength
 	}
-	
+
 	return "none", 0
 }
 
@@ -376,10 +376,10 @@ func generateDivergenceSummary(rsi, macd, obv *Divergence) string {
 	if rsi == nil && macd == nil && obv == nil {
 		return "No divergence detected"
 	}
-	
+
 	summary := "Divergence detected: "
 	divergences := []string{}
-	
+
 	if rsi != nil {
 		divergences = append(divergences, rsi.Indicator+" "+rsi.Type)
 	}
@@ -389,14 +389,13 @@ func generateDivergenceSummary(rsi, macd, obv *Divergence) string {
 	if obv != nil {
 		divergences = append(divergences, obv.Indicator+" "+obv.Type)
 	}
-	
+
 	for i, d := range divergences {
 		if i > 0 {
 			summary += ", "
 		}
 		summary += d
 	}
-	
+
 	return summary + ". Trend reversal may be imminent."
 }
-
