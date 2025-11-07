@@ -75,7 +75,7 @@ func EvaluateAnomalyEvent(
 
 // buildAnomalyPrompt 构建异常事件评估的 Prompt
 func buildAnomalyPrompt(event *market.AnomalyEvent, ctx *Context, anomalyConfig *config.AnomalyConfig) string {
-	var sb strings.Builder
+    var sb strings.Builder
 	
 	// System Prompt
 	sb.WriteString("# 角色定位\n")
@@ -93,14 +93,71 @@ func buildAnomalyPrompt(event *market.AnomalyEvent, ctx *Context, anomalyConfig 
 	sb.WriteString(fmt.Sprintf("- **触发时间**: %s\n", event.Timestamp.Format("2006-01-02 15:04:05")))
 	sb.WriteString("\n")
 	
-	// 市场数据
-	sb.WriteString("# 市场数据\n")
-	sb.WriteString(fmt.Sprintf("- **当前价格**: $%.2f\n", event.CurrentPrice))
-	sb.WriteString(fmt.Sprintf("- **3分钟价格变化**: %.2f%%\n", event.PriceChange3m))
-	sb.WriteString(fmt.Sprintf("- **15分钟价格变化**: %.2f%%\n", event.PriceChange15m))
-	sb.WriteString(fmt.Sprintf("- **成交量倍数**: %.1fx（相对均值）\n", event.VolumeRatio))
-	sb.WriteString(fmt.Sprintf("- **ATR倍数**: %.1fx（波动率）\n", event.ATRRatio))
-	sb.WriteString("\n")
+    // 市场数据
+    sb.WriteString("# 市场数据\n")
+    sb.WriteString(fmt.Sprintf("- **当前价格**: $%.2f\n", event.CurrentPrice))
+    sb.WriteString(fmt.Sprintf("- **3分钟价格变化**: %.2f%%\n", event.PriceChange3m))
+    sb.WriteString(fmt.Sprintf("- **15分钟价格变化**: %.2f%%\n", event.PriceChange15m))
+    sb.WriteString(fmt.Sprintf("- **成交量倍数**: %.1fx（相对均值）\n", event.VolumeRatio))
+    sb.WriteString(fmt.Sprintf("- **ATR倍数**: %.1fx（波动率）\n", event.ATRRatio))
+    sb.WriteString("\n")
+
+    // 触发币技术指标摘要（从 market_data_map 中获取更丰富的上下文）
+    if ctx.MarketDataMap != nil {
+        if md, ok := ctx.MarketDataMap[event.Symbol]; ok && md != nil {
+            sb.WriteString("# 技术指标与上下文（摘要）\n")
+            // 短中期价格与动量
+            sb.WriteString(fmt.Sprintf("- 1h/4h 涨跌幅: %.2f%% / %.2f%%\n", md.PriceChange1h, md.PriceChange4h))
+            sb.WriteString(fmt.Sprintf("- RSI(7): %.1f | MACD: %.3f | EMA20: %.3f\n", md.CurrentRSI7, md.CurrentMACD, md.CurrentEMA20))
+
+            // 多周期均线
+            if md.MultipleEMAs != nil {
+                sb.WriteString(fmt.Sprintf("- EMA(10/20/50/200): %.2f / %.2f / %.2f / %.2f\n",
+                    md.MultipleEMAs.EMA10, md.MultipleEMAs.EMA20, md.MultipleEMAs.EMA50, md.MultipleEMAs.EMA200))
+            }
+
+            // 布林带
+            if md.BollingerBands != nil {
+                sb.WriteString(fmt.Sprintf("- 布林带: 带宽 %.2f%% | %%B %.2f\n", md.BollingerBands.BandWidth, md.BollingerBands.PercentB))
+            }
+
+            // 趋势强度
+            if md.ADX != nil {
+                sb.WriteString(fmt.Sprintf("- ADX: %.1f | +DI: %.1f | -DI: %.1f\n", md.ADX.ADX, md.ADX.PlusDI, md.ADX.MinusDI))
+            }
+
+            // VWAP 偏离
+            if md.VWAP > 0 {
+                vwapDiff := 0.0
+                if md.VWAP != 0 {
+                    vwapDiff = (md.CurrentPrice - md.VWAP) / md.VWAP * 100
+                }
+                sb.WriteString(fmt.Sprintf("- VWAP: %.2f (%+.2f%% 相对价格)\n", md.VWAP, vwapDiff))
+            }
+
+            // OI / Funding
+            if md.OpenInterest != nil {
+                sb.WriteString(fmt.Sprintf("- OI: 最新 %.2f, 均值 %.2f\n", md.OpenInterest.Latest, md.OpenInterest.Average))
+            }
+            sb.WriteString(fmt.Sprintf("- Funding: %.2e\n", md.FundingRate))
+
+            // 4h 上下文
+            if md.LongerTermContext != nil {
+                sb.WriteString(fmt.Sprintf("- 4h ATR14: %.3f | 平均量: %.0f\n", md.LongerTermContext.ATR14, md.LongerTermContext.AverageVolume))
+            }
+
+            // 语义化总结
+            if md.Semantics != nil {
+                signals := strings.Join(md.Semantics.KeySignals, ", ")
+                sb.WriteString(fmt.Sprintf("- 语义: 趋势 %s/%s, 动量 %s, 波动 %s\n",
+                    md.Semantics.TrendDirection, md.Semantics.TrendStrength, md.Semantics.MomentumStatus, md.Semantics.VolatilityLevel))
+                if len(signals) > 0 {
+                    sb.WriteString(fmt.Sprintf("- 关键信号: %s\n", signals))
+                }
+            }
+            sb.WriteString("\n")
+        }
+    }
 	
 	// 当前持仓情况
 	sb.WriteString("# 当前持仓情况\n")

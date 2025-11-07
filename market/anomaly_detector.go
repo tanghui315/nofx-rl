@@ -164,21 +164,31 @@ func (d *AnomalyDetector) detectPriceAnomaly(current *Kline, recent []Kline) *An
 		// 计算严重程度
 		severity := d.calculateSeverity(priceChangePct, threshold)
 
-		event := &AnomalyEvent{
-			ID:            generateEventID(),
-			Symbol:        d.symbol,
-			Type:          anomalyType,
-			Severity:      severity,
-			Timestamp:     time.Now(),
-			PriceChange3m: priceChangePct * sign(current.Close-prevClose),
-			VolumeRatio:   0,
-			ATRRatio:      priceChangePct / atrPct,
-			Direction:     direction,
-			CurrentPrice:  current.Close,
-			CurrentVolume: current.Volume,
-			Kline:         current,
-			RecentKlines:  recent,
-		}
+        // 计算15分钟涨跌幅（5根3m K线之前的收盘价）
+        priceChange15m := 0.0
+        if len(recent) >= 6 { // recent 包含 current，因此取 len-6 作为15分钟前的收盘价
+            base := recent[len(recent)-6].Close
+            if base > 0 {
+                priceChange15m = (current.Close - base) / base * 100
+            }
+        }
+
+        event := &AnomalyEvent{
+            ID:            generateEventID(),
+            Symbol:        d.symbol,
+            Type:          anomalyType,
+            Severity:      severity,
+            Timestamp:     time.Now(),
+            PriceChange3m: priceChangePct * sign(current.Close-prevClose),
+            PriceChange15m: priceChange15m,
+            VolumeRatio:   0,
+            ATRRatio:      priceChangePct / atrPct,
+            Direction:     direction,
+            CurrentPrice:  current.Close,
+            CurrentVolume: current.Volume,
+            Kline:         current,
+            RecentKlines:  recent,
+        }
 
 		// 更新冷却期
 		d.updateLastEventTime(anomalyType)
@@ -216,13 +226,13 @@ func (d *AnomalyDetector) detectVolumeAnomaly(current *Kline, recent []Kline) *A
 			return nil
 		}
 
-		// 计算价格变化
-		prevClose := recent[len(recent)-1].Close
-		priceChangePct := (current.Close - prevClose) / prevClose * 100
-		direction := "UP"
-		if priceChangePct < 0 {
-			direction = "DOWN"
-		}
+        // 计算价格变化（上一根收盘价，recent 含 current，取倒数第二根）
+        prevClose := recent[len(recent)-2].Close
+        priceChangePct := (current.Close - prevClose) / prevClose * 100
+        direction := "UP"
+        if priceChangePct < 0 {
+            direction = "DOWN"
+        }
 
 		// 计算严重程度
 		severity := SeverityMedium
@@ -233,20 +243,30 @@ func (d *AnomalyDetector) detectVolumeAnomaly(current *Kline, recent []Kline) *A
 			severity = SeverityCritical
 		}
 
-		event := &AnomalyEvent{
-			ID:            generateEventID(),
-			Symbol:        d.symbol,
-			Type:          AnomalyVolumeSpike,
-			Severity:      severity,
-			Timestamp:     time.Now(),
-			PriceChange3m: priceChangePct,
-			VolumeRatio:   volumeRatio,
-			Direction:     direction,
-			CurrentPrice:  current.Close,
-			CurrentVolume: current.Volume,
-			Kline:         current,
-			RecentKlines:  recent,
-		}
+        // 计算15分钟涨跌幅（5根3m K线之前的收盘价）
+        priceChange15m := 0.0
+        if len(recent) >= 6 { // recent 包含 current，因此取 len-6 作为15分钟前的收盘价
+            base := recent[len(recent)-6].Close
+            if base > 0 {
+                priceChange15m = (current.Close - base) / base * 100
+            }
+        }
+
+        event := &AnomalyEvent{
+            ID:            generateEventID(),
+            Symbol:        d.symbol,
+            Type:          AnomalyVolumeSpike,
+            Severity:      severity,
+            Timestamp:     time.Now(),
+            PriceChange3m: priceChangePct,
+            PriceChange15m: priceChange15m,
+            VolumeRatio:   volumeRatio,
+            Direction:     direction,
+            CurrentPrice:  current.Close,
+            CurrentVolume: current.Volume,
+            Kline:         current,
+            RecentKlines:  recent,
+        }
 
 		// 更新冷却期
 		d.updateLastEventTime(AnomalyVolumeSpike)
@@ -308,19 +328,29 @@ func (d *AnomalyDetector) detectConsecutiveMove(current *Kline, recent []Kline) 
 			severity = SeverityHigh
 		}
 
-		event := &AnomalyEvent{
-			ID:            generateEventID(),
-			Symbol:        d.symbol,
-			Type:          anomalyType,
-			Severity:      severity,
-			Timestamp:     time.Now(),
-			PriceChange3m: totalChange * 100,
-			Direction:     direction,
-			CurrentPrice:  current.Close,
-			CurrentVolume: current.Volume,
-			Kline:         current,
-			RecentKlines:  recent,
-		}
+        // 计算15分钟涨跌幅（5根3m K线之前的收盘价；若历史不足6根则置0）
+        priceChange15m := 0.0
+        if len(recent) >= 6 { // recent 含 current
+            base := recent[len(recent)-6].Close
+            if base > 0 {
+                priceChange15m = (current.Close - base) / base * 100
+            }
+        }
+
+        event := &AnomalyEvent{
+            ID:            generateEventID(),
+            Symbol:        d.symbol,
+            Type:          anomalyType,
+            Severity:      severity,
+            Timestamp:     time.Now(),
+            PriceChange3m: totalChange * 100,
+            PriceChange15m: priceChange15m,
+            Direction:     direction,
+            CurrentPrice:  current.Close,
+            CurrentVolume: current.Volume,
+            Kline:         current,
+            RecentKlines:  recent,
+        }
 
 		// 更新冷却期
 		d.updateLastEventTime(anomalyType)
