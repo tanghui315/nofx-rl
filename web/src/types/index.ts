@@ -54,6 +54,7 @@ export interface DecisionAction {
 
 // 决策记录
 export interface DecisionRecord {
+  source?: string
   timestamp: string
   cycle_number: number
   input_prompt: string

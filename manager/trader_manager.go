@@ -780,7 +780,7 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 	for _, traderCfg := range traders {
 		// 检查是否已经加载过这个交易员
 		if _, exists := tm.traders[traderCfg.ID]; exists {
-			log.Printf("⚠️ 交易员 %s 已经加载，跳过", traderCfg.Name)
+			// log.Printf("⚠️ 交易员 %s 已经加载，跳过", traderCfg.Name)
 			continue
 		}
 

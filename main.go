@@ -337,7 +337,10 @@ func main() {
 	if err != nil {
 		log.Printf("⚠️  加载异常监控配置失败: %v", err)
 	} else if anomalyConfig.IsEnabled() {
-		// 启用异常监控
+            // 先设置异常监控配置（供阈值分层使用），再启用
+            wsMonitor.SetAnomalyConfig(anomalyConfig)
+
+            // 启用异常监控（阈值可能在内部按币种分层调整）
             wsMonitor.EnableAnomalyDetection(
                 anomalyConfig.GetPriceThreshold(),
                 anomalyConfig.GetVolumeMultiplier(),
@@ -347,49 +350,58 @@ func main() {
                 anomalyConfig.GetAbsMinPriceChangePct(),
                 anomalyConfig.GetCoolingPeriodMinutes(), // 动作冷却与检测冷却一致，后续可独立配置
             )
-		log.Printf("✅ 异常监控配置：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
-		
-		// 设置异常监控配置（避免导入循环）
-		wsMonitor.SetAnomalyConfig(anomalyConfig)
+            log.Printf("✅ 异常监控配置：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
 		
 		// 设置依赖（Phase 3）
-		// 加载 AI 模型配置（使用 default 用户的第一个启用的模型）
-		var aiModelConfig *config.AIModelConfig
-		aiModels, err := database.GetAIModels("default")
-		if err == nil && len(aiModels) > 0 {
-			// 找到第一个启用的模型
-			for _, model := range aiModels {
-				if model.Enabled {
-					aiModelConfig = model
-					break
-				}
-			}
-		}
+        // 加载 AI 模型配置（按用户优先级选择已启用模型）：
+        // 1) admin 模式优先使用 admin 用户；2) 其次 default；3) 再遍历其余用户的已启用模型
+        var aiModelConfig *config.AIModelConfig
+        var candidateUsers []string
+        if adminMode { candidateUsers = append(candidateUsers, "admin") }
+        candidateUsers = append(candidateUsers, "default")
+        if allUsers, e := database.GetAllUsers(); e == nil {
+            for _, u := range allUsers {
+                // 去重：避免重复加入 admin/default
+                if u == "admin" || u == "default" { continue }
+                candidateUsers = append(candidateUsers, u)
+            }
+        }
+        for _, uid := range candidateUsers {
+            models, e := database.GetAIModels(uid)
+            if e != nil || len(models) == 0 { continue }
+            for _, m := range models {
+                if m.Enabled {
+                    aiModelConfig = m
+                    break
+                }
+            }
+            if aiModelConfig != nil { break }
+        }
 		
 		// 创建 MCP 客户端
 		mcpClient := mcp.New()
-		if aiModelConfig != nil {
-			// 根据模型类型配置 MCP 客户端
-			if aiModelConfig.Provider == "deepseek" {
-				mcpClient.SetDeepSeekAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
-			} else if aiModelConfig.Provider == "qwen" {
-				mcpClient.SetQwenAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
-			} else if aiModelConfig.Provider == "custom" {
-				mcpClient.SetCustomAPI(aiModelConfig.CustomAPIURL, aiModelConfig.APIKey, aiModelConfig.CustomModelName)
-			}
-		}
+        if aiModelConfig != nil {
+            // 根据模型类型配置 MCP 客户端
+            if aiModelConfig.Provider == "deepseek" {
+                mcpClient.SetDeepSeekAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
+            } else if aiModelConfig.Provider == "qwen" {
+                mcpClient.SetQwenAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
+            } else if aiModelConfig.Provider == "custom" {
+                mcpClient.SetCustomAPI(aiModelConfig.CustomAPIURL, aiModelConfig.APIKey, aiModelConfig.CustomModelName)
+            }
+        }
 		
 		// 设置依赖
 		wsMonitor.SetDependencies(traderManager, aiModelConfig, mcpClient)
 		
 		// 创建并设置 LLM 评估器适配器（解决导入循环问题）
-		if aiModelConfig != nil && anomalyConfig.GetUseLLM() {
-			evaluatorAdapter := decision.NewAnomalyEvaluatorAdapter(mcpClient)
-			wsMonitor.SetLLMEvaluator(evaluatorAdapter)
-			log.Printf("✅ LLM评估器已设置（使用 %s 模型）", aiModelConfig.Provider)
-		} else {
-			log.Printf("💡 LLM评估器未设置（AI模型未配置或LLM未启用）")
-		}
+        if aiModelConfig != nil && anomalyConfig.GetUseLLM() {
+            evaluatorAdapter := decision.NewAnomalyEvaluatorAdapter(mcpClient)
+            wsMonitor.SetLLMEvaluator(evaluatorAdapter)
+            log.Printf("✅ LLM评估器已设置（使用 %s 模型，user=%s）", aiModelConfig.Provider, aiModelConfig.UserID)
+        } else {
+            log.Printf("💡 LLM评估器未设置（AI模型未配置或LLM未启用）")
+        }
 	} else {
 		log.Printf("⏸️  异常监控已禁用（模式：%s）", anomalyConfig.Mode)
 	}

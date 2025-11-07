@@ -12,9 +12,11 @@ import (
 
 // DecisionRecord 决策记录
 type DecisionRecord struct {
-	Timestamp      time.Time          `json:"timestamp"`       // 决策时间
-	CycleNumber    int                `json:"cycle_number"`    // 周期编号
-	SystemPrompt   string             `json:"system_prompt"`   // 系统提示词（发送给AI的系统prompt）
+    // Source 用于标记来源（如 "anomaly"），便于前端做区分
+    Source         string             `json:"source,omitempty"`
+    Timestamp      time.Time          `json:"timestamp"`       // 决策时间
+    CycleNumber    int                `json:"cycle_number"`    // 周期编号
+    SystemPrompt   string             `json:"system_prompt"`   // 系统提示词（发送给AI的系统prompt）
 	InputPrompt    string             `json:"input_prompt"`    // 发送给AI的输入prompt
 	CoTTrace       string             `json:"cot_trace"`       // AI思维链（输出）
 	DecisionJSON   string             `json:"decision_json"`   // 决策JSON
@@ -26,6 +28,9 @@ type DecisionRecord struct {
 	Success        bool               `json:"success"`         // 是否成功
 	ErrorMessage   string             `json:"error_message"`   // 错误信息（如果有）
 }
+
+// SetSource 兼容性辅助：允许外部通过接口方式设置来源
+func (r *DecisionRecord) SetSource(s string) { r.Source = s }
 
 // AccountSnapshot 账户状态快照
 type AccountSnapshot struct {

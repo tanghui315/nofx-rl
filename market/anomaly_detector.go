@@ -132,8 +132,11 @@ func (d *AnomalyDetector) detectPriceAnomaly(current *Kline, recent []Kline) *An
 	// ATR 标准化的价格变化百分比
 	atrPct := atr / current.Close * 100
 
-	// 获取前一根 K 线
-	prevClose := recent[len(recent)-1].Close
+    // 获取前一根 K 线（注意 recent 不包含 current，本应取倒数第二根收盘价）
+    if len(recent) < 2 {
+        return nil
+    }
+    prevClose := recent[len(recent)-2].Close
 
 	// 价格变化百分比
 	priceChangePct := math.Abs((current.Close - prevClose) / prevClose * 100)

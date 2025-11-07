@@ -1062,15 +1062,26 @@ function DecisionCard({
             {new Date(decision.timestamp).toLocaleString()}
           </div>
         </div>
-        <div
-          className="px-3 py-1 rounded text-xs font-bold"
-          style={
-            decision.success
-              ? { background: 'rgba(14, 203, 129, 0.1)', color: '#0ECB81' }
-              : { background: 'rgba(246, 70, 93, 0.1)', color: '#F6465D' }
-          }
-        >
-          {t(decision.success ? 'success' : 'failed', language)}
+        <div className="flex items-center gap-2">
+          {decision.source === 'anomaly' && (
+            <div
+              className="px-2 py-0.5 rounded text-xs font-bold"
+              style={{ background: 'rgba(240,185,11,0.12)', color: '#F0B90B' }}
+              title="来自异常监控应急处理"
+            >
+              ANOMALY
+            </div>
+          )}
+          <div
+            className="px-3 py-1 rounded text-xs font-bold"
+            style={
+              decision.success
+                ? { background: 'rgba(14, 203, 129, 0.1)', color: '#0ECB81' }
+                : { background: 'rgba(246, 70, 93, 0.1)', color: '#F6465D' }
+            }
+          >
+            {t(decision.success ? 'success' : 'failed', language)}
+          </div>
         </div>
       </div>
 

@@ -1,19 +1,20 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"net"
-	"net/http"
-	"nofx/auth"
-	"nofx/config"
-	"nofx/decision"
-	"nofx/manager"
-	"nofx/trader"
-	"strconv"
-	"strings"
-	"time"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net"
+    "net/http"
+    "nofx/auth"
+    "nofx/config"
+    "nofx/decision"
+    "nofx/manager"
+    "nofx/market"
+    "nofx/trader"
+    "strconv"
+    "strings"
+    "time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -84,17 +85,21 @@ func (s *Server) setupRoutes() {
 		// 系统配置（无需认证，用于前端判断是否管理员模式/注册是否开启）
 		api.GET("/config", s.handleGetSystemConfig)
 
-		// 系统提示词模板管理（无需认证）
-		api.GET("/prompt-templates", s.handleGetPromptTemplates)
-		api.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
+        // 系统提示词模板管理（无需认证）- 仅在非管理员模式下开放
+        if !auth.IsAdminMode() {
+            api.GET("/prompt-templates", s.handleGetPromptTemplates)
+            api.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
+        }
 
-		// 公开的竞赛数据（无需认证）
-		api.GET("/traders", s.handlePublicTraderList)
-		api.GET("/competition", s.handlePublicCompetition)
-		api.GET("/top-traders", s.handleTopTraders)
-		api.GET("/equity-history", s.handleEquityHistory)
-		api.POST("/equity-history-batch", s.handleEquityHistoryBatch)
-		api.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
+        // 公开的竞赛/统计数据（无需认证）- 仅在非管理员模式下开放
+        if !auth.IsAdminMode() {
+            api.GET("/traders", s.handlePublicTraderList)
+            api.GET("/competition", s.handlePublicCompetition)
+            api.GET("/top-traders", s.handleTopTraders)
+            api.GET("/equity-history", s.handleEquityHistory)
+            api.POST("/equity-history-batch", s.handleEquityHistoryBatch)
+            api.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
+        }
 
 		// 仅在非管理员模式下的路由
 		if !auth.IsAdminMode() {
@@ -163,6 +168,9 @@ func (s *Server) setupRoutes() {
 			protected.GET("/anomaly/config", s.handleGetAnomalyConfig)
 			protected.PUT("/anomaly/config", s.handleUpdateAnomalyConfig)
 			protected.GET("/anomaly/status", s.handleGetAnomalyStatus)
+
+			// 开发专用（通过构建标签 dev 控制的增强路由）
+			augmentRoutes(s, api, protected)
 		}
 	}
 }
@@ -2443,12 +2451,19 @@ func (s *Server) handleGetAnomalyStatus(c *gin.Context) {
 		description = "未知模式"
 	}
 	
-	c.JSON(http.StatusOK, gin.H{
-		"enabled":        anomalyConfig.IsEnabled(),
-		"mode":           anomalyConfig.Mode,
-		"sensitivity":    anomalyConfig.Sensitivity,
-		"use_llm":        anomalyConfig.UseLLM,
-		"gambit_enabled": anomalyConfig.GambitEnabled,
-		"description":    description,
-	})
+    // 监控币种数量（若 WSMonitor 可用）
+    monitored := 0
+    if market.WSMonitorCli != nil {
+        monitored = market.WSMonitorCli.GetMonitoredCount()
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "enabled":            anomalyConfig.IsEnabled(),
+        "mode":               anomalyConfig.Mode,
+        "sensitivity":        anomalyConfig.Sensitivity,
+        "use_llm":            anomalyConfig.UseLLM,
+        "gambit_enabled":     anomalyConfig.GambitEnabled,
+        "description":        description,
+        "monitored_symbols":  monitored,
+    })
 }

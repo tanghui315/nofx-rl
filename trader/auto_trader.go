@@ -1227,7 +1227,56 @@ func (at *AutoTrader) GetSystemPromptTemplate() string {
 
 // GetDecisionLogger 获取决策日志记录器
 func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
-	return at.decisionLogger
+    return at.decisionLogger
+}
+
+// LogAnomalyAction 记录异常监控触发的紧急操作到决策日志（用于前端“最近决策”展示）
+func (at *AutoTrader) LogAnomalyAction(symbol, action string, price float64, extra map[string]interface{}) {
+    if at.decisionLogger == nil {
+        return
+    }
+    act := logger.DecisionAction{
+        Action:    action,
+        Symbol:    symbol,
+        Quantity:  0,
+        Leverage:  0,
+        Price:     price,
+        OrderID:   0,
+        Timestamp: time.Now(),
+        Success:   true,
+        Error:     "",
+    }
+    if extra != nil {
+        if q, ok := extra["quantity"].(float64); ok { act.Quantity = q }
+        if lev, ok := extra["leverage"].(int); ok { act.Leverage = lev }
+        switch v := extra["order_id"].(type) {
+        case int64:
+            act.OrderID = v
+        case float64:
+            act.OrderID = int64(v)
+        case int:
+            act.OrderID = int64(v)
+        }
+    }
+    rec := &logger.DecisionRecord{
+        Source:       "anomaly",
+        InputPrompt:  fmt.Sprintf("[ANOMALY] %s %s", symbol, action),
+        DecisionJSON: "{}",
+        Decisions:    []logger.DecisionAction{act},
+        Success:      true,
+    }
+    if extra != nil {
+        if note, ok := extra["note"].(string); ok && note != "" {
+            rec.ExecutionLog = []string{"LLM: " + note}
+        }
+        if ip, ok := extra["input_prompt"].(string); ok && ip != "" {
+            rec.InputPrompt = ip
+        }
+        if cot, ok := extra["cot_trace"].(string); ok && cot != "" {
+            rec.CoTTrace = cot
+        }
+    }
+    _ = at.decisionLogger.LogDecision(rec)
 }
 
 // GetStatus 获取系统状态（用于API）

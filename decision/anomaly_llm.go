@@ -38,39 +38,39 @@ type AnomalyDecision struct {
 
 // EvaluateAnomalyEvent 评估异常事件并给出LLM决策
 func EvaluateAnomalyEvent(
-	event *market.AnomalyEvent,
-	ctx *Context,
-	anomalyConfig *config.AnomalyConfig,
-	aiModelConfig *config.AIModelConfig,
-	mcpClient *mcp.Client,
-) (*AnomalyDecision, error) {
-	log.Printf("🤖 开始LLM评估异常事件：%s %s (严重程度: %s)", event.Symbol, event.Type, event.Severity)
-	
-	// 构建 LLM Prompt
-	prompt := buildAnomalyPrompt(event, ctx, anomalyConfig)
-	
-	// 调用 LLM
-	startTime := time.Now()
-	response, err := callLLM(aiModelConfig, mcpClient, prompt)
-	if err != nil {
-		log.Printf("❌ LLM调用失败: %v", err)
-		return nil, fmt.Errorf("LLM调用失败: %v", err)
-	}
-	elapsed := time.Since(startTime)
-	
-	log.Printf("✅ LLM响应完成 (耗时: %.2fs)", elapsed.Seconds())
-	
-	// 解析 LLM 响应
-	decision, err := parseAnomalyDecision(response)
-	if err != nil {
-		log.Printf("❌ 解析LLM响应失败: %v\n响应内容:\n%s", err, response)
-		return nil, fmt.Errorf("解析LLM响应失败: %v", err)
-	}
-	
-	log.Printf("🎯 LLM决策：行动=%v, 操作=%s, 置信度=%.0f%%, 紧急度=%s", 
-		decision.ShouldAct, decision.Action, decision.Confidence*100, decision.Urgency)
-	
-	return decision, nil
+    event *market.AnomalyEvent,
+    ctx *Context,
+    anomalyConfig *config.AnomalyConfig,
+    aiModelConfig *config.AIModelConfig,
+    mcpClient *mcp.Client,
+) (*AnomalyDecision, string, string, error) {
+    log.Printf("🤖 开始LLM评估异常事件：%s %s (严重程度: %s)", event.Symbol, event.Type, event.Severity)
+    
+    // 构建 LLM Prompt
+    prompt := buildAnomalyPrompt(event, ctx, anomalyConfig)
+    
+    // 调用 LLM
+    startTime := time.Now()
+    response, err := callLLM(aiModelConfig, mcpClient, prompt)
+    if err != nil {
+        log.Printf("❌ LLM调用失败: %v", err)
+        return nil, prompt, "", fmt.Errorf("LLM调用失败: %v", err)
+    }
+    elapsed := time.Since(startTime)
+    
+    log.Printf("✅ LLM响应完成 (耗时: %.2fs)", elapsed.Seconds())
+    
+    // 解析 LLM 响应
+    decision, err := parseAnomalyDecision(response)
+    if err != nil {
+        log.Printf("❌ 解析LLM响应失败: %v\n响应内容:\n%s", err, response)
+        return nil, prompt, response, fmt.Errorf("解析LLM响应失败: %v", err)
+    }
+    
+    log.Printf("🎯 LLM决策：行动=%v, 操作=%s, 置信度=%.0f%%, 紧急度=%s", 
+        decision.ShouldAct, decision.Action, decision.Confidence*100, decision.Urgency)
+    
+    return decision, prompt, response, nil
 }
 
 // buildAnomalyPrompt 构建异常事件评估的 Prompt
@@ -302,23 +302,12 @@ func extractJSONFromResponse(response string) string {
 
 // callLLM 调用 LLM API
 func callLLM(aiModelConfig *config.AIModelConfig, mcpClient *mcp.Client, prompt string) (string, error) {
-	// TODO: 集成实际的 LLM 调用
-	// 暂时返回模拟响应用于测试
-	log.Printf("⚠️  LLM调用未完全实现，返回模拟响应")
-	
-	// 模拟响应（后续需要替换为实际调用）
-	mockResponse := `{
-		"should_act": false,
-		"confidence": 0.6,
-		"action": "wait",
-		"urgency": "low",
-		"reasoning": "市场波动较大，但尚未达到可操作的置信度阈值",
-		"risk_factors": ["波动率过高", "方向不明确"],
-		"key_indicators": ["3分钟价格变化", "成交量"],
-		"market_context": "当前处于观察阶段，等待更明确信号"
-	}`
-	
-	return mockResponse, nil
+    if mcpClient == nil {
+        return "", fmt.Errorf("MCP 客户端未初始化")
+    }
+    // 最小 system 提示，主要信息放在 user 提示中。
+    system := "You are a professional crypto risk-control analyst. Return STRICT JSON as instructed."
+    return mcpClient.CallWithMessages(system, prompt)
 }
 
 // Helper functions
@@ -397,4 +386,3 @@ func minInt(a, b int) int {
 	}
 	return b
 }
-

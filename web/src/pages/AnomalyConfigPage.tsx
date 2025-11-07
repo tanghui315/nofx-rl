@@ -25,6 +25,7 @@ interface AnomalyStatus {
   use_llm: boolean
   gambit_enabled: boolean
   description: string
+  monitored_symbols?: number
 }
 
 export function AnomalyConfigPage() {
@@ -187,6 +188,11 @@ export function AnomalyConfigPage() {
                 <div className="text-lg font-semibold text-[#EAECEF]">
                   {status.description}
                 </div>
+                {typeof status.monitored_symbols === 'number' && (
+                  <div className="text-xs text-[#9CA3AF] mt-1">
+                    监控币种：{status.monitored_symbols}
+                  </div>
+                )}
               </div>
               <div className={`px-3 py-1 rounded-full text-sm font-medium ${
                 status.enabled 

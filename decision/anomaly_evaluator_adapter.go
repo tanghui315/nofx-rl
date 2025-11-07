@@ -46,13 +46,17 @@ func (a *AnomalyEvaluatorAdapter) Evaluate(
 	}
 
 	// 调用 decision.EvaluateAnomalyEvent
-	decision, err := EvaluateAnomalyEvent(event, ctx, cfg, aiModelCfg, a.mcpClient)
-	if err != nil {
-		return nil, fmt.Errorf("LLM评估失败: %w", err)
-	}
+    decision, prompt, rawResp, err := EvaluateAnomalyEvent(event, ctx, cfg, aiModelCfg, a.mcpClient)
+    if err != nil {
+        return nil, fmt.Errorf("LLM评估失败: %w", err)
+    }
 
-	// 将 decision 转换为 map
-	return a.convertDecisionToMap(decision), nil
+    // 将 decision 转换为 map
+    m := a.convertDecisionToMap(decision)
+    // 附加调试/可视化字段：输入提示与原始响应，供上层写入日志（前端可展开查看）
+    m["input_prompt"] = prompt
+    m["cot_trace"] = rawResp
+    return m, nil
 }
 
 // convertContextMapToContext 将 map 格式的上下文转换为 decision.Context
@@ -250,4 +254,3 @@ func (a *AnomalyEvaluatorAdapter) convertMapToDecision(decisionMap map[string]in
 
 	return decision
 }
-

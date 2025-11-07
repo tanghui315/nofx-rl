@@ -1,14 +1,14 @@
 package market
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"nofx/mcp"
-	"reflect"
-	"strings"
-	"sync"
-	"time"
+    "encoding/json"
+    "fmt"
+    "log"
+    "nofx/mcp"
+    "reflect"
+    "strings"
+    "sync"
+    "time"
 )
 
 type WSMonitor struct {
@@ -43,6 +43,23 @@ type WSMonitor struct {
     // 执行动作冷却（按 symbol）
     lastActionTime       sync.Map // symbol -> time.Time
     actionCooldownMinute int      // 最小执行间隔（分钟）
+
+    // 评估去抖动：限制同一 symbol 在短时间内重复 LLM 评估，避免短时多事件导致多条相似记录
+    lastEvalTime   sync.Map // symbol -> time.Time
+    evalCooldownMs int      // 毫秒
+
+    // 延迟启用参数（symbols 未加载时的缓冲）
+    pendingMu      sync.Mutex
+    pendingEnabled bool
+    pendingParams  struct {
+        priceK        float64
+        volM          float64
+        consec        float64
+        minQuoteUSDT  float64
+        coolMin       int
+        absFloorPct   float64
+        actionCoolMin int
+    }
 }
 type SymbolStats struct {
 	LastActiveTime   time.Time
@@ -56,16 +73,17 @@ var WSMonitorCli *WSMonitor
 var subKlineTime = []string{"3m", "4h"} // 管理订阅流的K线周期
 
 func NewWSMonitor(batchSize int) *WSMonitor {
-	WSMonitorCli = &WSMonitor{
+    WSMonitorCli = &WSMonitor{
 		wsClient:         NewWSClient(),
 		combinedClient:   NewCombinedStreamsClient(batchSize),
 		alertsChan:       make(chan Alert, 1000),
 		batchSize:        batchSize,
 		anomalyDetectors: make(map[string]*AnomalyDetector),
-		anomalyEventChan: make(chan *AnomalyEvent, 100), // 缓冲100个事件
-		anomalyEnabled:   false,                         // 默认关闭，等待配置加载
-	}
-	return WSMonitorCli
+        anomalyEventChan: make(chan *AnomalyEvent, 100), // 缓冲100个事件
+        anomalyEnabled:   false,                         // 默认关闭，等待配置加载
+        evalCooldownMs:   2000,                          // 默认 2s 去抖
+    }
+    return WSMonitorCli
 }
 
 func (m *WSMonitor) Initialize(coins []string) error {
@@ -192,8 +210,19 @@ func (m *WSMonitor) subscribeAll() error {
 			return err
 		}
 	}
-	log.Println("所有交易对订阅完成")
-	return nil
+    log.Println("所有交易对订阅完成")
+
+    // 若存在延迟启用的异常监控参数，此处立即创建检测器
+    m.pendingMu.Lock()
+    if m.pendingEnabled {
+        p := m.pendingParams
+        m.pendingEnabled = false
+        m.pendingMu.Unlock()
+        m.EnableAnomalyDetection(p.priceK, p.volM, p.consec, p.minQuoteUSDT, p.coolMin, p.absFloorPct, p.actionCoolMin)
+    } else {
+        m.pendingMu.Unlock()
+    }
+    return nil
 }
 
 func (m *WSMonitor) handleKlineData(symbol string, ch <-chan []byte, _time string) {
@@ -324,19 +353,65 @@ func (m *WSMonitor) EnableAnomalyDetection(
     absMinPriceChangePct float64,
     actionCooldownMinutes int,
 ) {
-	m.detectorMutex.Lock()
-	defer m.detectorMutex.Unlock()
+    m.detectorMutex.Lock()
+    defer m.detectorMutex.Unlock()
 
-	// 为每个币种创建检测器
-	for _, symbol := range m.symbols {
+    if len(m.symbols) == 0 {
+        m.pendingMu.Lock()
+        m.pendingEnabled = true
+        m.pendingParams = struct {
+            priceK        float64
+            volM          float64
+            consec        float64
+            minQuoteUSDT  float64
+            coolMin       int
+            absFloorPct   float64
+            actionCoolMin int
+        }{priceThresholdK, volumeMultiplierM, consecutiveThreshold, minVolumeUSDT, coolingPeriod, absMinPriceChangePct, actionCooldownMinutes}
+        m.pendingMu.Unlock()
+
+        m.anomalyEnabled = true
+        if actionCooldownMinutes > 0 { m.actionCooldownMinute = actionCooldownMinutes } else { m.actionCooldownMinute = coolingPeriod }
+        log.Printf("⏳ 异常监控已启用（延迟）：监控币种尚未加载，初始化完成后将自动创建检测器")
+        return
+    }
+
+    // 顶级流动性白名单（按 3m 阈值下调）：BTC/ETH/BNB
+    topSymbols := map[string]bool{"BTCUSDT": true, "ETHUSDT": true, "BNBUSDT": true}
+
+    // 根据配置的灵敏度，计算顶级流动币的专用阈值
+    topAbsFloor := absMinPriceChangePct
+    topConsecutive := consecutiveThreshold
+    if ac, ok := m.anomalyConfig.(AnomalyConfigInterface); ok && ac != nil {
+        switch ac.GetSensitivity() {
+        case "high":
+            topAbsFloor = 1.5  // 单根绝对下限 1.5%
+            topConsecutive = 0.04 // 连续三根累计 4%
+        case "medium":
+            topAbsFloor = 1.7
+            topConsecutive = 0.05
+        case "low":
+            topAbsFloor = 2.0
+            topConsecutive = 0.06
+        }
+    }
+
+    // 为每个币种创建检测器（顶级流动币使用更低的绝对下限与连续阈值）
+    for _, symbol := range m.symbols {
+        absFloor := absMinPriceChangePct
+        consec := consecutiveThreshold
+        if topSymbols[strings.ToUpper(symbol)] {
+            absFloor = topAbsFloor
+            consec = topConsecutive
+        }
         detector := NewAnomalyDetector(
             symbol,
             priceThresholdK,
             volumeMultiplierM,
-            consecutiveThreshold,
+            consec,
             minVolumeUSDT,
             coolingPeriod,
-            absMinPriceChangePct,
+            absFloor,
         )
         m.anomalyDetectors[symbol] = detector
     }
@@ -388,21 +463,23 @@ func (m *WSMonitor) detectAnomalies(symbol string, currentKline *Kline, recentKl
 
 // AutoTraderInterface AutoTrader接口（避免导入循环）
 type AutoTraderInterface interface {
-	GetAccountInfo() (map[string]interface{}, error)
-	GetPositions() ([]map[string]interface{}, error)
-	ClosePosition(symbol, side string, quantity float64) (map[string]interface{}, error)
-	// OpenPosition 开仓（用于异常监控，复用现有执行逻辑）
-	OpenPosition(symbol, side string, positionSizeUSD float64, leverage int, stopLoss, takeProfit float64) (map[string]interface{}, error)
-	// GetBTCETHLeverage 获取BTC/ETH杠杆配置
-	GetBTCETHLeverage() int
-	// GetAltcoinLeverage 获取山寨币杠杆配置
-	GetAltcoinLeverage() int
-	// SetLeverage 设置杠杆（可选，用于异常监控）
-	SetLeverage(symbol string, leverage int) error
-	// SetStopLoss 设置止损（可选，用于异常监控）
-	SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error
-	// GetStatus 获取交易员状态（包含运行时长和调用次数）
-	GetStatus() map[string]interface{}
+    GetAccountInfo() (map[string]interface{}, error)
+    GetPositions() ([]map[string]interface{}, error)
+    ClosePosition(symbol, side string, quantity float64) (map[string]interface{}, error)
+    // OpenPosition 开仓（用于异常监控，复用现有执行逻辑）
+    OpenPosition(symbol, side string, positionSizeUSD float64, leverage int, stopLoss, takeProfit float64) (map[string]interface{}, error)
+    // GetBTCETHLeverage 获取BTC/ETH杠杆配置
+    GetBTCETHLeverage() int
+    // GetAltcoinLeverage 获取山寨币杠杆配置
+    GetAltcoinLeverage() int
+    // SetLeverage 设置杠杆（可选，用于异常监控）
+    SetLeverage(symbol string, leverage int) error
+    // SetStopLoss 设置止损（可选，用于异常监控）
+    SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error
+    // GetStatus 获取交易员状态（包含运行时长和调用次数）
+    GetStatus() map[string]interface{}
+    // LogAnomalyAction 记录异常处理动作到决策日志
+    LogAnomalyAction(symbol, action string, price float64, extra map[string]interface{})
 }
 
 // TraderManagerInterface 交易员管理器接口（避免导入循环）
@@ -469,22 +546,23 @@ func (m *WSMonitor) processAnomalyEvent(event *AnomalyEvent) {
 		return
 	}
 
-	traderMgr, ok := m.traderManager.(TraderManagerInterface)
-	if !ok {
-		log.Printf("⚠️  交易员管理器类型错误")
-		return
-	}
-
-	traderIDs := traderMgr.GetTraderIDs()
-	if len(traderIDs) == 0 {
-		log.Printf("⚠️  没有活跃的trader，跳过异常事件处理")
-		return
-	}
+    traderMgr, ok := m.traderManager.(TraderManagerInterface)
+    var traderIDs []string
+    if ok {
+        traderIDs = traderMgr.GetTraderIDs()
+    } else {
+        log.Printf("⚠️  交易员管理器类型错误，尝试反射方式获取 trader 列表")
+        traderIDs = m.listTraderIDsReflect()
+    }
+    if len(traderIDs) == 0 {
+        log.Printf("⚠️  没有活跃的trader，跳过异常事件处理")
+        return
+    }
 
 	// 为每个trader处理异常事件
-	for _, traderID := range traderIDs {
-		go m.processAnomalyEventForTrader(event, traderID, traderMgr)
-	}
+    for _, traderID := range traderIDs {
+        go m.processAnomalyEventForTrader(event, traderID)
+    }
 }
 
 // AnomalyConfigInterface 异常配置接口（避免导入循环）
@@ -516,9 +594,8 @@ type AnomalyLLMEvaluatorInterface interface {
 func (m *WSMonitor) processAnomalyEventForTrader(
     event *AnomalyEvent,
     traderID string,
-    traderMgr TraderManagerInterface,
 ) {
-	log.Printf("🎯 为trader %s 处理异常事件：%s", traderID, event.Symbol)
+    log.Printf("🎯 为trader %s 处理异常事件：%s", traderID, event.Symbol)
 
     // 检查配置
     if m.anomalyConfig == nil {
@@ -542,58 +619,111 @@ func (m *WSMonitor) processAnomalyEventForTrader(
         return
     }
 
+    // 获取 trader（接口或通过反射回退），并检查运行状态
+    at, err := m.getAutoTraderByID(traderID)
+    if err != nil {
+        log.Printf("⚠️  未找到 trader %s，跳过异常处理", traderID)
+        return
+    }
+    if st := at.GetStatus(); st != nil {
+        if running, ok := st["is_running"].(bool); ok && !running {
+            log.Printf("⏭️  跳过异常处理：trader %s 未运行（is_running=false）", traderID)
+            return
+        }
+    }
+
     // 执行动作冷却：同一 symbol 在最小间隔内只执行一次
     if !m.canExecuteAction(event.Symbol) {
         log.Printf("⏸️  动作冷却中：%s，跳过执行", event.Symbol)
         return
     }
 
-	// 获取trader实例
-	trader, err := traderMgr.GetTrader(traderID)
-	if err != nil {
-		log.Printf("❌ 获取trader %s 失败: %v", traderID, err)
-		return
-	}
-
-	// 检查是否使用LLM
+    // 检查是否使用LLM
     if !anomalyConfig.GetUseLLM() {
         // 不使用LLM：使用预设规则
-        m.applyRuleBasedDecision(event, anomalyConfig, trader, traderID)
+        m.applyRuleBasedDecision(event, anomalyConfig, at, traderID)
         return
     }
 
-	// Step 4: LLM评估（通过接口调用，避免导入循环）
-	if m.llmEvaluator == nil {
-		log.Printf("⚠️  LLM评估器未设置，使用规则决策")
-		m.applyRuleBasedDecision(event, anomalyConfig, trader, traderID)
-		return
-	}
+    // 评估去抖：若同一 symbol 在 evalCooldownMs 内刚评估过，则跳过评估，避免重复日志
+    if m.evalCooldownMs > 0 {
+        if v, ok := m.lastEvalTime.Load(event.Symbol); ok {
+            if t, ok2 := v.(time.Time); ok2 {
+                if time.Since(t) < time.Duration(m.evalCooldownMs)*time.Millisecond {
+                    log.Printf("⏸️  评估去抖：%s 距上次评估过短，跳过本次 LLM 评估", event.Symbol)
+                    return
+                }
+            }
+        }
+        m.lastEvalTime.Store(event.Symbol, time.Now())
+    }
+
+    // Step 4: LLM评估（通过接口调用，避免导入循环）
+    if m.llmEvaluator == nil {
+        log.Printf("⚠️  LLM评估器未设置，使用规则决策")
+        m.applyRuleBasedDecision(event, anomalyConfig, at, traderID)
+        return
+    }
 
 	// 准备决策上下文
-	ctxMap, err := m.prepareDecisionContext(event.Symbol, trader)
+    ctxMap, err := m.prepareDecisionContext(event.Symbol, at)
 	if err != nil {
 		log.Printf("❌ 准备决策上下文失败: %v", err)
-		m.applyRuleBasedDecision(event, anomalyConfig, trader, traderID)
-		return
-	}
+        m.applyRuleBasedDecision(event, anomalyConfig, at, traderID)
+        return
+    }
 
 	// 调用LLM评估（通过接口）
 	decisionMap, err := m.llmEvaluator.Evaluate(event, ctxMap, m.anomalyConfig, m.aiModel)
 	if err != nil {
 		log.Printf("❌ LLM评估失败: %v，使用规则决策", err)
-		m.applyRuleBasedDecision(event, anomalyConfig, trader, traderID)
-		return
-	}
+        m.applyRuleBasedDecision(event, anomalyConfig, at, traderID)
+        return
+    }
 
 	// Step 5: 决策验证（4层验证）
 	if err := m.llmEvaluator.Validate(decisionMap, event, ctxMap, m.anomalyConfig); err != nil {
 		log.Printf("⚠️  决策验证失败: %v，使用规则决策", err)
-		m.applyRuleBasedDecision(event, anomalyConfig, trader, traderID)
-		return
-	}
+        m.applyRuleBasedDecision(event, anomalyConfig, at, traderID)
+        return
+    }
 
 	// Step 6: 执行LLM决策
-	m.executeLLMDecision(decisionMap, event, ctxMap, trader, traderID)
+    m.executeLLMDecision(decisionMap, event, ctxMap, at, traderID)
+}
+
+// getAutoTraderByID 获取实现 AutoTraderInterface 的 trader 实例（优先接口，失败则反射回退）
+func (m *WSMonitor) getAutoTraderByID(traderID string) (AutoTraderInterface, error) {
+    if tm, ok := m.traderManager.(TraderManagerInterface); ok && tm != nil {
+        return tm.GetTrader(traderID)
+    }
+    // 反射调用 GetTrader(string) (T, error)
+    v := reflect.ValueOf(m.traderManager)
+    if !v.IsValid() {
+        return nil, fmt.Errorf("traderManager invalid")
+    }
+    mth := v.MethodByName("GetTrader")
+    if !mth.IsValid() {
+        return nil, fmt.Errorf("GetTrader method not found")
+    }
+    out := mth.Call([]reflect.Value{reflect.ValueOf(traderID)})
+    if len(out) != 2 {
+        return nil, fmt.Errorf("GetTrader signature mismatch")
+    }
+    if !out[1].IsNil() {
+        if err, ok := out[1].Interface().(error); ok {
+            return nil, err
+        }
+        return nil, fmt.Errorf("GetTrader returned non-error second value")
+    }
+    traderVal := out[0]
+    if !traderVal.IsValid() || traderVal.IsNil() {
+        return nil, fmt.Errorf("nil trader returned")
+    }
+    if at, ok := traderVal.Interface().(AutoTraderInterface); ok {
+        return at, nil
+    }
+    return nil, fmt.Errorf("trader does not implement AutoTraderInterface")
 }
 
 // prepareDecisionContext 准备决策上下文
@@ -805,11 +935,16 @@ func (m *WSMonitor) executeLLMDecision(
 	log.Printf("🎯 执行LLM决策：%s %s, 操作=%s, 置信度=%.0f%%, 是否行动=%v",
 		event.Symbol, event.Type, action, confidence*100, shouldAct)
 	
-	if !shouldAct {
-		reasoning, _ := decisionMap["reasoning"].(string)
-		log.Printf("💡 LLM建议观望：%s", reasoning)
-		return
-	}
+    if !shouldAct {
+        reasoning, _ := decisionMap["reasoning"].(string)
+        log.Printf("💡 LLM建议观望：%s", reasoning)
+        // 记录到“最近决策”，把 prompt 和 LLM 原文一并写入，便于前端展示
+        extra := map[string]interface{}{"note": reasoning}
+        if ipt, ok := decisionMap["input_prompt"].(string); ok { extra["input_prompt"] = ipt }
+        if cot, ok := decisionMap["cot_trace"].(string); ok { extra["cot_trace"] = cot }
+        m.logAnomalyDecision(autoTrader, event.Symbol, "wait", nil, extra)
+        return
+    }
 	
 	// 根据action执行相应操作
     switch action {
@@ -839,6 +974,17 @@ func (m *WSMonitor) executeLLMDecision(
         log.Printf("💡 LLM建议等待：%s", reasoning)
     default:
         log.Printf("⚠️  未知操作：%s", action)
+    }
+
+    // 将 prompt/cot 透传给日志（如果 adapter 提供）
+    {
+        extra := map[string]interface{}{}
+        if ipt, ok := decisionMap["input_prompt"].(string); ok { extra["input_prompt"] = ipt }
+        if cot, ok := decisionMap["cot_trace"].(string); ok { extra["cot_trace"] = cot }
+        // action 已执行或 wait 情况上面已处理；此处仅当 extra 有内容时再补记一条“无动作”记录避免重复
+        if len(extra) > 0 && action != "wait" {
+            m.logAnomalyDecision(autoTrader, event.Symbol, "context", nil, extra)
+        }
     }
 }
 
@@ -901,10 +1047,10 @@ func (m *WSMonitor) markAction(symbol string) {
 
 // executeOpenLong 执行开多仓（通过接口调用，复用现有执行逻辑）
 func (m *WSMonitor) executeOpenLong(
-	symbol string,
-	decisionMap map[string]interface{}, // 决策结果（map格式）
-	autoTrader AutoTraderInterface,
-	traderID string,
+    symbol string,
+    decisionMap map[string]interface{}, // 决策结果（map格式）
+    autoTrader AutoTraderInterface,
+    traderID string,
 ) {
 	// 直接从map中提取决策字段
 	positionSizeUSD, _ := decisionMap["position_size_usd"].(float64)
@@ -921,13 +1067,14 @@ func (m *WSMonitor) executeOpenLong(
 		symbol, positionSizeUSD, leverage, stopLoss, takeProfit)
 
 	// 通过接口调用 OpenPosition，复用现有执行逻辑
-	order, err := autoTrader.OpenPosition(symbol, "long", positionSizeUSD, leverage, stopLoss, takeProfit)
-	if err != nil {
-		log.Printf("❌ 开多仓失败: %v", err)
-		return
-	}
+    order, err := autoTrader.OpenPosition(symbol, "long", positionSizeUSD, leverage, stopLoss, takeProfit)
+    if err != nil {
+        log.Printf("❌ 开多仓失败: %v", err)
+        return
+    }
 
-	log.Printf("✅ 开多仓成功：%s, 订单ID: %v", symbol, order["orderId"])
+    log.Printf("✅ 开多仓成功：%s, 订单ID: %v", symbol, order["orderId"])
+    m.logAnomalyDecision(autoTrader, symbol, "open_long", order, nil)
 }
 
 // executeOpenShort 执行开空仓（通过接口调用，复用现有执行逻辑）
@@ -952,13 +1099,14 @@ func (m *WSMonitor) executeOpenShort(
 		symbol, positionSizeUSD, leverage, stopLoss, takeProfit)
 
 	// 通过接口调用 OpenPosition，复用现有执行逻辑
-	order, err := autoTrader.OpenPosition(symbol, "short", positionSizeUSD, leverage, stopLoss, takeProfit)
-	if err != nil {
-		log.Printf("❌ 开空仓失败: %v", err)
-		return
-	}
+    order, err := autoTrader.OpenPosition(symbol, "short", positionSizeUSD, leverage, stopLoss, takeProfit)
+    if err != nil {
+        log.Printf("❌ 开空仓失败: %v", err)
+        return
+    }
 
-	log.Printf("✅ 开空仓成功：%s, 订单ID: %v", symbol, order["orderId"])
+    log.Printf("✅ 开空仓成功：%s, 订单ID: %v", symbol, order["orderId"])
+    m.logAnomalyDecision(autoTrader, symbol, "open_short", order, nil)
 }
 
 // extractDecisionFields 从决策对象中提取字段（使用反射，避免导入 decision 包）
@@ -1025,17 +1173,18 @@ func (m *WSMonitor) executeReduceLong(
 				closeQuantity := quantity * (closePercentage / 100.0)
 
 				// 平仓（使用ClosePosition方法）
-				result, err := autoTrader.ClosePosition(symbol, "long", closeQuantity)
-				if err != nil {
-					log.Printf("❌ 减多仓失败: %v", err)
-					return
-				}
+                result, err := autoTrader.ClosePosition(symbol, "long", closeQuantity)
+                if err != nil {
+                    log.Printf("❌ 减多仓失败: %v", err)
+                    return
+                }
 
-				log.Printf("✅ 减多仓成功：%s, 平仓数量: %.4f, 结果: %v", symbol, closeQuantity, result)
-				return
-			}
-		}
-	}
+                log.Printf("✅ 减多仓成功：%s, 平仓数量: %.4f, 结果: %v", symbol, closeQuantity, result)
+                m.logAnomalyDecision(autoTrader, symbol, "partial_close_long", result, map[string]interface{}{"quantity": closeQuantity})
+                return
+            }
+        }
+    }
 
 	log.Printf("⚠️  未找到 %s 的多仓", symbol)
 }
@@ -1068,17 +1217,18 @@ func (m *WSMonitor) executeReduceShort(
 				closeQuantity := quantity * (closePercentage / 100.0)
 
 				// 平仓（使用ClosePosition方法）
-				result, err := autoTrader.ClosePosition(symbol, "short", closeQuantity)
-				if err != nil {
-					log.Printf("❌ 减空仓失败: %v", err)
-					return
-				}
+                result, err := autoTrader.ClosePosition(symbol, "short", closeQuantity)
+                if err != nil {
+                    log.Printf("❌ 减空仓失败: %v", err)
+                    return
+                }
 
-				log.Printf("✅ 减空仓成功：%s, 平仓数量: %.4f, 结果: %v", symbol, closeQuantity, result)
-				return
-			}
-		}
-	}
+                log.Printf("✅ 减空仓成功：%s, 平仓数量: %.4f, 结果: %v", symbol, closeQuantity, result)
+                m.logAnomalyDecision(autoTrader, symbol, "partial_close_short", result, map[string]interface{}{"quantity": closeQuantity})
+                return
+            }
+        }
+    }
 
 	log.Printf("⚠️  未找到 %s 的空仓", symbol)
 }
@@ -1104,20 +1254,80 @@ func (m *WSMonitor) executeCloseAll(
 			side, _ := pos["side"].(string)
 
 			if side == "long" {
-				if _, err := autoTrader.ClosePosition(symbol, "long", 0); err != nil {
-					log.Printf("❌ 平多仓失败: %v", err)
-				} else {
-					log.Printf("✅ 多仓已全部平仓")
-				}
-			} else if side == "short" {
-				if _, err := autoTrader.ClosePosition(symbol, "short", 0); err != nil {
-					log.Printf("❌ 平空仓失败: %v", err)
-				} else {
-					log.Printf("✅ 空仓已全部平仓")
-				}
-			}
-		}
-	}
+                if result, err := autoTrader.ClosePosition(symbol, "long", 0); err != nil {
+                    log.Printf("❌ 平多仓失败: %v", err)
+                } else {
+                    log.Printf("✅ 多仓已全部平仓")
+                    m.logAnomalyDecision(autoTrader, symbol, "close_long", result, nil)
+                }
+            } else if side == "short" {
+                if result, err := autoTrader.ClosePosition(symbol, "short", 0); err != nil {
+                    log.Printf("❌ 平空仓失败: %v", err)
+                } else {
+                    log.Printf("✅ 空仓已全部平仓")
+                    m.logAnomalyDecision(autoTrader, symbol, "close_short", result, nil)
+                }
+            }
+        }
+    }
+}
+
+// logAnomalyDecision 将异常触发的执行记录写入决策日志（标记 source=anomaly）
+func (m *WSMonitor) logAnomalyDecision(autoTrader AutoTraderInterface, symbol, action string, order map[string]interface{}, extra map[string]interface{}) {
+    // 当前价格（可选）
+    price := 0.0
+    if md, err := Get(symbol); err == nil {
+        price = md.CurrentPrice
+    }
+    // 额外信息：合并 order 信息
+    extraMap := map[string]interface{}{}
+    for k, v := range extra {
+        extraMap[k] = v
+    }
+    if order != nil {
+        if oid, ok := order["orderId"]; ok {
+            extraMap["order_id"] = oid
+        }
+    }
+    autoTrader.LogAnomalyAction(symbol, action, price, extraMap)
+}
+
+// GetMonitoredCount 返回当前监控的币种数量
+func (m *WSMonitor) GetMonitoredCount() int {
+    return len(m.symbols)
+}
+
+// listTraderIDsReflect 通过反射获取 TraderManager 的 trader 列表
+func (m *WSMonitor) listTraderIDsReflect() []string {
+    ids := []string{}
+    v := reflect.ValueOf(m.traderManager)
+    if !v.IsValid() {
+        return ids
+    }
+    // 优先调用 GetTraderIDs() []string
+    if mth := v.MethodByName("GetTraderIDs"); mth.IsValid() {
+        out := mth.Call(nil)
+        if len(out) == 1 {
+            if s, ok := out[0].Interface().([]string); ok {
+                return s
+            }
+        }
+    }
+    // 次选 GetAllTraders() map[string]T
+    if mth := v.MethodByName("GetAllTraders"); mth.IsValid() {
+        out := mth.Call(nil)
+        if len(out) == 1 {
+            mv := out[0]
+            if mv.IsValid() && mv.Kind() == reflect.Map {
+                for _, k := range mv.MapKeys() {
+                    if k.Kind() == reflect.String {
+                        ids = append(ids, k.Interface().(string))
+                    }
+                }
+            }
+        }
+    }
+    return ids
 }
 
 // GetAnomalyEventChan 获取异常事件通道（供其他模块订阅）
