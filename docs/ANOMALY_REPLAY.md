@@ -229,3 +229,5 @@ scripts/anomaly_replay.sh start consecutive BTCUSDT 5.5 3 down
 - `api/replay_dev.go` / `api/replay_stub.go`（路由）
 - `market/replay_dev.go`（回放实现）
 - `api/server.go`：`augmentRoutes` 挂载点（dev/非 dev 自动切换）
+
+仓位余额低于200,则最低杠杆不能低于10倍，开仓尽量不要留余额

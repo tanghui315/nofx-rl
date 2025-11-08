@@ -1,13 +1,14 @@
 package trader
 
 import (
-	"context"
-	"fmt"
-	"log"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+    "context"
+    "fmt"
+    "log"
+    "net/http"
+    "strconv"
+    "strings"
+    "sync"
+    "time"
 
 	"github.com/adshao/go-binance/v2/futures"
 )
@@ -32,9 +33,11 @@ type FuturesTrader struct {
 
 // NewFuturesTrader 创建合约交易器
 func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
-	client := futures.NewClient(apiKey, secretKey)
-	// 同步时间，避免 Timestamp ahead 错误
-	syncBinanceServerTime(client)
+    client := futures.NewClient(apiKey, secretKey)
+    // 配置 HTTP 客户端以支持代理（遵循 HTTP(S)_PROXY/NO_PROXY 环境变量）
+    client.HTTPClient = &http.Client{ Transport: http.DefaultTransport, Timeout: 30 * time.Second }
+    // 同步时间，避免 Timestamp ahead 错误
+    syncBinanceServerTime(client)
 	trader := &FuturesTrader{
 		client:        client,
 		cacheDuration: 15 * time.Second, // 15秒缓存

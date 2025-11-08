@@ -23,5 +23,8 @@
   "jwt_secret": "Qk0kAa+d0iIEzXVHXbNbm+UaN3RNabmWtH8rDWZ5OPf+4GX8pBflAHodfpbipVMyrw1fsDanHsNBjhgbDeK9Jg==",
   "log": {
     "level": "info"
-  }
+  },
+  "http_proxy": "",
+  "https_proxy": "",
+  "no_proxy": "localhost,127.0.0.1"
 }
