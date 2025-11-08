@@ -102,7 +102,7 @@ type AutoTrader struct {
 	positionFirstSeenTime map[string]int64   // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	stopMonitorCh         chan struct{}      // 用于停止监控goroutine
 	monitorWg             sync.WaitGroup     // 用于等待监控goroutine结束
-	peakPnLCache          map[string]float64 // 最高收益缓存 (symbol -> 峰值盈亏百分比)
+	peakPnLCache          map[string]float64 // 最高收益缓存 (symbol_side -> 峰值盈亏百分比)
 	peakPnLCacheMutex     sync.RWMutex       // 缓存读写锁
 	lastBalanceSyncTime   time.Time          // 上次余额同步时间
 	database              interface{}        // 数据库引用（用于自动更新余额）
@@ -269,6 +269,9 @@ func (at *AutoTrader) Run() error {
 
 // Stop 停止自动交易
 func (at *AutoTrader) Stop() {
+	if !at.isRunning {
+		return
+	}
 	at.isRunning = false
 	close(at.stopMonitorCh) // 通知监控goroutine停止
 	at.monitorWg.Wait()     // 等待监控goroutine结束
@@ -1227,56 +1230,60 @@ func (at *AutoTrader) GetSystemPromptTemplate() string {
 
 // GetDecisionLogger 获取决策日志记录器
 func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
-    return at.decisionLogger
+	return at.decisionLogger
 }
 
 // LogAnomalyAction 记录异常监控触发的紧急操作到决策日志（用于前端“最近决策”展示）
 func (at *AutoTrader) LogAnomalyAction(symbol, action string, price float64, extra map[string]interface{}) {
-    if at.decisionLogger == nil {
-        return
-    }
-    act := logger.DecisionAction{
-        Action:    action,
-        Symbol:    symbol,
-        Quantity:  0,
-        Leverage:  0,
-        Price:     price,
-        OrderID:   0,
-        Timestamp: time.Now(),
-        Success:   true,
-        Error:     "",
-    }
-    if extra != nil {
-        if q, ok := extra["quantity"].(float64); ok { act.Quantity = q }
-        if lev, ok := extra["leverage"].(int); ok { act.Leverage = lev }
-        switch v := extra["order_id"].(type) {
-        case int64:
-            act.OrderID = v
-        case float64:
-            act.OrderID = int64(v)
-        case int:
-            act.OrderID = int64(v)
-        }
-    }
-    rec := &logger.DecisionRecord{
-        Source:       "anomaly",
-        InputPrompt:  fmt.Sprintf("[ANOMALY] %s %s", symbol, action),
-        DecisionJSON: "{}",
-        Decisions:    []logger.DecisionAction{act},
-        Success:      true,
-    }
-    if extra != nil {
-        if note, ok := extra["note"].(string); ok && note != "" {
-            rec.ExecutionLog = []string{"LLM: " + note}
-        }
-        if ip, ok := extra["input_prompt"].(string); ok && ip != "" {
-            rec.InputPrompt = ip
-        }
-        if cot, ok := extra["cot_trace"].(string); ok && cot != "" {
-            rec.CoTTrace = cot
-        }
-    }
-    _ = at.decisionLogger.LogDecision(rec)
+	if at.decisionLogger == nil {
+		return
+	}
+	act := logger.DecisionAction{
+		Action:    action,
+		Symbol:    symbol,
+		Quantity:  0,
+		Leverage:  0,
+		Price:     price,
+		OrderID:   0,
+		Timestamp: time.Now(),
+		Success:   true,
+		Error:     "",
+	}
+	if extra != nil {
+		if q, ok := extra["quantity"].(float64); ok {
+			act.Quantity = q
+		}
+		if lev, ok := extra["leverage"].(int); ok {
+			act.Leverage = lev
+		}
+		switch v := extra["order_id"].(type) {
+		case int64:
+			act.OrderID = v
+		case float64:
+			act.OrderID = int64(v)
+		case int:
+			act.OrderID = int64(v)
+		}
+	}
+	rec := &logger.DecisionRecord{
+		Source:       "anomaly",
+		InputPrompt:  fmt.Sprintf("[ANOMALY] %s %s", symbol, action),
+		DecisionJSON: "{}",
+		Decisions:    []logger.DecisionAction{act},
+		Success:      true,
+	}
+	if extra != nil {
+		if note, ok := extra["note"].(string); ok && note != "" {
+			rec.ExecutionLog = []string{"LLM: " + note}
+		}
+		if ip, ok := extra["input_prompt"].(string); ok && ip != "" {
+			rec.InputPrompt = ip
+		}
+		if cot, ok := extra["cot_trace"].(string); ok && cot != "" {
+			rec.CoTTrace = cot
+		}
+	}
+	_ = at.decisionLogger.LogDecision(rec)
 }
 
 // GetStatus 获取系统状态（用于API）
@@ -1388,10 +1395,10 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 // ClosePosition 手动平仓（供API调用）
 func (at *AutoTrader) ClosePosition(symbol, side string, quantity float64) (map[string]interface{}, error) {
 	log.Printf("🔧 手动平仓请求: %s %s 数量=%.4f", symbol, side, quantity)
-	
+
 	var result map[string]interface{}
 	var err error
-	
+
 	if side == "long" {
 		result, err = at.trader.CloseLong(symbol, quantity)
 	} else if side == "short" {
@@ -1399,12 +1406,12 @@ func (at *AutoTrader) ClosePosition(symbol, side string, quantity float64) (map[
 	} else {
 		return nil, fmt.Errorf("无效的持仓方向: %s，必须是 'long' 或 'short'", side)
 	}
-	
+
 	if err != nil {
 		log.Printf("❌ 手动平仓失败: %v", err)
 		return nil, err
 	}
-	
+
 	log.Printf("✓ 手动平仓成功: %s %s", symbol, side)
 	return result, nil
 }
@@ -1412,7 +1419,7 @@ func (at *AutoTrader) ClosePosition(symbol, side string, quantity float64) (map[
 // OpenPosition 开仓（用于异常监控，复用现有执行逻辑）
 func (at *AutoTrader) OpenPosition(symbol, side string, positionSizeUSD float64, leverage int, stopLoss, takeProfit float64) (map[string]interface{}, error) {
 	log.Printf("🔧 异常监控开仓请求: %s %s, 仓位: $%.2f, 杠杆: %dx", symbol, side, positionSizeUSD, leverage)
-	
+
 	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
 	positions, err := at.trader.GetPositions()
 	if err == nil {
@@ -1422,19 +1429,19 @@ func (at *AutoTrader) OpenPosition(symbol, side string, positionSizeUSD float64,
 			}
 		}
 	}
-	
+
 	// 获取当前价格
 	marketData, err := market.Get(symbol)
 	if err != nil {
 		return nil, fmt.Errorf("获取市场价格失败: %w", err)
 	}
-	
+
 	// 计算数量
 	quantity := positionSizeUSD / marketData.CurrentPrice
-	
+
 	// ⚠️ 保证金验证：防止保证金不足错误（code=-2019）
 	requiredMargin := positionSizeUSD / float64(leverage)
-	
+
 	balance, err := at.trader.GetBalance()
 	if err != nil {
 		return nil, fmt.Errorf("获取账户余额失败: %w", err)
@@ -1443,22 +1450,22 @@ func (at *AutoTrader) OpenPosition(symbol, side string, positionSizeUSD float64,
 	if avail, ok := balance["availableBalance"].(float64); ok {
 		availableBalance = avail
 	}
-	
+
 	// 手续费估算（Taker费率 0.04%）
 	estimatedFee := positionSizeUSD * 0.0004
 	totalRequired := requiredMargin + estimatedFee
-	
+
 	if totalRequired > availableBalance {
 		return nil, fmt.Errorf("❌ 保证金不足: 需要 %.2f USDT（保证金 %.2f + 手续费 %.2f），可用 %.2f USDT",
 			totalRequired, requiredMargin, estimatedFee, availableBalance)
 	}
-	
+
 	// 设置仓位模式
 	if err := at.trader.SetMarginMode(symbol, at.config.IsCrossMargin); err != nil {
 		log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
 		// 继续执行，不影响交易
 	}
-	
+
 	// 开仓
 	var order map[string]interface{}
 	if side == "long" {
@@ -1468,17 +1475,17 @@ func (at *AutoTrader) OpenPosition(symbol, side string, positionSizeUSD float64,
 	} else {
 		return nil, fmt.Errorf("无效的持仓方向: %s，必须是 'long' 或 'short'", side)
 	}
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("开仓失败: %w", err)
 	}
-	
+
 	log.Printf("✓ 异常监控开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
-	
+
 	// 记录开仓时间
 	posKey := symbol + "_" + side
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
-	
+
 	// 设置止损止盈
 	if stopLoss > 0 {
 		sideUpper := strings.ToUpper(side)
@@ -1492,7 +1499,7 @@ func (at *AutoTrader) OpenPosition(symbol, side string, positionSizeUSD float64,
 			log.Printf("  ⚠ 设置止盈失败: %v", err)
 		}
 	}
-	
+
 	return order, nil
 }
 
@@ -1733,18 +1740,29 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			currentPnLPct = ((entryPrice - markPrice) / entryPrice) * float64(leverage) * 100
 		}
 
+		// 使用 symbol+side 作为 key，避免多空持仓相互干扰
+		key := fmt.Sprintf("%s_%s", symbol, strings.ToLower(side))
+
+		// 若切换方向，清理对侧缓存（避免旧峰值影响回撤判断）
+		opposite := "long"
+		if strings.ToLower(side) == "long" {
+			opposite = "short"
+		}
+		oppositeKey := fmt.Sprintf("%s_%s", symbol, opposite)
+		at.ClearPeakPnLCacheByKey(oppositeKey)
+
 		// 获取该持仓的历史最高收益
 		at.peakPnLCacheMutex.RLock()
-		peakPnLPct, exists := at.peakPnLCache[symbol]
+		peakPnLPct, exists := at.peakPnLCache[key]
 		at.peakPnLCacheMutex.RUnlock()
 
 		if !exists {
 			// 如果没有历史最高记录，使用当前盈亏作为初始值
 			peakPnLPct = currentPnLPct
-			at.UpdatePeakPnL(symbol, currentPnLPct)
+			at.UpdatePeakPnL(symbol, side, currentPnLPct)
 		} else {
 			// 更新峰值缓存
-			at.UpdatePeakPnL(symbol, currentPnLPct)
+			at.UpdatePeakPnL(symbol, side, currentPnLPct)
 		}
 
 		// 计算回撤（从最高点下跌的幅度）
@@ -1763,8 +1781,9 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				log.Printf("❌ 回撤平仓失败 (%s %s): %v", symbol, side, err)
 			} else {
 				log.Printf("✅ 回撤平仓成功: %s %s", symbol, side)
-				// 平仓后清理该symbol的缓存
-				at.ClearPeakPnLCache(symbol)
+				// 平仓后清理该 symbol 的两侧缓存
+				at.ClearPeakPnLCache(symbol, "long")
+				at.ClearPeakPnLCache(symbol, "short")
 			}
 		} else if currentPnLPct > 5.0 {
 			// 记录接近平仓条件的情况（用于调试）
@@ -1809,26 +1828,35 @@ func (at *AutoTrader) GetPeakPnLCache() map[string]float64 {
 	return cache
 }
 
-// UpdatePeakPnL 更新最高收益缓存
-func (at *AutoTrader) UpdatePeakPnL(symbol string, currentPnLPct float64) {
+// UpdatePeakPnL 更新最高收益缓存（按 symbol+side 维度）
+func (at *AutoTrader) UpdatePeakPnL(symbol, side string, currentPnLPct float64) {
 	at.peakPnLCacheMutex.Lock()
 	defer at.peakPnLCacheMutex.Unlock()
 
-	if peak, exists := at.peakPnLCache[symbol]; exists {
+	key := fmt.Sprintf("%s_%s", symbol, strings.ToLower(side))
+	if peak, exists := at.peakPnLCache[key]; exists {
 		// 更新峰值（如果是多头，取较大值；如果是空头，currentPnLPct为负，也要比较）
 		if currentPnLPct > peak {
-			at.peakPnLCache[symbol] = currentPnLPct
+			at.peakPnLCache[key] = currentPnLPct
 		}
 	} else {
 		// 首次记录
-		at.peakPnLCache[symbol] = currentPnLPct
+		at.peakPnLCache[key] = currentPnLPct
 	}
 }
 
-// ClearPeakPnLCache 清除指定symbol的峰值缓存
-func (at *AutoTrader) ClearPeakPnLCache(symbol string) {
+// ClearPeakPnLCache 清除指定 symbol+side 的峰值缓存
+func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 	at.peakPnLCacheMutex.Lock()
 	defer at.peakPnLCacheMutex.Unlock()
 
-	delete(at.peakPnLCache, symbol)
+	key := fmt.Sprintf("%s_%s", symbol, strings.ToLower(side))
+	delete(at.peakPnLCache, key)
+}
+
+// ClearPeakPnLCacheByKey 通过完整 key 清理（内部使用）
+func (at *AutoTrader) ClearPeakPnLCacheByKey(key string) {
+	at.peakPnLCacheMutex.Lock()
+	delete(at.peakPnLCache, key)
+	at.peakPnLCacheMutex.Unlock()
 }

@@ -401,7 +401,7 @@ func Format(data *Data) string {
 	// 然后是详细的技术指标数据
 	sb.WriteString("## 📈 Detailed Technical Indicators\n\n")
 
-	sb.WriteString(fmt.Sprintf("**Current Price:** %.2f\n\n", data.CurrentPrice))
+	sb.WriteString(fmt.Sprintf("**Current Price:** %s\n\n", formatPriceWithDynamicPrecision(data.CurrentPrice)))
 
 	// 布林带
 	if data.BollingerBands != nil {
@@ -472,8 +472,9 @@ func Format(data *Data) string {
 	sb.WriteString(fmt.Sprintf("**Open Interest & Funding Rate (%s):**\n", data.Symbol))
 
 	if data.OpenInterest != nil {
-		sb.WriteString(fmt.Sprintf("Open Interest: Latest: %.2f Average: %.2f\n\n",
-			data.OpenInterest.Latest, data.OpenInterest.Average))
+		sb.WriteString(fmt.Sprintf("Open Interest: Latest: %s  Average: %s\n\n",
+			formatPriceWithDynamicPrecision(data.OpenInterest.Latest),
+			formatPriceWithDynamicPrecision(data.OpenInterest.Average)))
 	}
 
 	sb.WriteString(fmt.Sprintf("Funding Rate: %.2e\n\n", data.FundingRate))
@@ -548,9 +549,39 @@ func Format(data *Data) string {
 func formatFloatSlice(values []float64) string {
 	strValues := make([]string, len(values))
 	for i, v := range values {
-		strValues[i] = fmt.Sprintf("%.3f", v)
+		strValues[i] = formatPriceWithDynamicPrecision(v)
 	}
 	return "[" + strings.Join(strValues, ", ") + "]"
+}
+
+// formatPriceWithDynamicPrecision 根据数值的量级动态调整小数位，
+// 以提升可读性并避免不必要的长小数或指数表示。
+func formatPriceWithDynamicPrecision(v float64) string {
+	abs := math.Abs(v)
+	switch {
+	case abs >= 10000:
+		return fmt.Sprintf("%.2f", v)
+	case abs >= 1000:
+		return fmt.Sprintf("%.3f", v)
+	case abs >= 100:
+		return fmt.Sprintf("%.4f", v)
+	case abs >= 10:
+		return fmt.Sprintf("%.5f", v)
+	case abs >= 1:
+		return fmt.Sprintf("%.6f", v)
+	case abs >= 0.1:
+		return fmt.Sprintf("%.7f", v)
+	case abs >= 0.01:
+		return fmt.Sprintf("%.8f", v)
+	default:
+		// 极小值：保留更多位，且去掉多余的尾随0
+		s := fmt.Sprintf("%.10f", v)
+		s = strings.TrimRight(s, "0")
+		if strings.HasSuffix(s, ".") {
+			s += "0"
+		}
+		return s
+	}
 }
 
 // Normalize 标准化symbol,确保是USDT交易对

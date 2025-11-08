@@ -6,6 +6,48 @@
 
 set -e
 
+# Args (defaults)
+COMMIT_SHA=""
+MODE="cherry"      # cherry|merge
+REMOTE="upstream"
+BRANCH=""          # optional; when empty, infer from current branch
+NO_CONFIRM=0
+FORCE=0
+DRY_RUN=0
+
+usage() {
+  cat <<EOF
+Usage:
+  $(basename "$0")                    # 同步指定分支(默认和当前分支匹配)
+  $(basename "$0") --commit <sha>     # 合入上游的某个提交(默认 cherry-pick)
+
+Options:
+  --commit, -c   <sha>   上游提交ID
+  --mode,   -m   <cherry|merge>  方式(默认 cherry)
+  --remote, -r   <name>  上游远程(默认 upstream)
+  --branch, -b   <name>  参考分支(用于 fetch 与预览)
+  --no-confirm          跳过交互确认
+  --force               忽略未提交更改
+  --dry-run             仅展示将执行的步骤
+  --help, -h            显示帮助
+EOF
+}
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --commit|-c) COMMIT_SHA="$2"; shift 2;;
+    --mode|-m)   MODE="$2"; shift 2;;
+    --remote|-r) REMOTE="$2"; shift 2;;
+    --branch|-b) BRANCH="$2"; shift 2;;
+    --no-confirm) NO_CONFIRM=1; shift;;
+    --force)       FORCE=1; shift;;
+    --dry-run)     DRY_RUN=1; shift;;
+    --help|-h) usage; exit 0;;
+    *) log_warning "未知参数: $1"; usage; exit 1;;
+  esac
+done
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -70,81 +112,115 @@ log_section "检查工作区状态"
 if ! git diff --quiet || ! git diff --cached --quiet; then
     log_warning "检测到未提交的更改"
     echo ""
-    echo "未提交的文件:"
-    git status --short
-    
+    echo "未提交的文件:"; git status --short
     echo ""
-    if ! confirm "继续同步可能会影响未提交的更改。是否继续?"; then
-        log_info "已取消同步"
-        exit 0
+    if [[ $FORCE -eq 0 ]]; then
+      if [[ $NO_CONFIRM -eq 1 ]] || confirm "继续可能影响未提交的更改，是否继续?"; then :; else
+        log_info "已取消同步"; exit 0; fi
     fi
 else
     log_success "工作区干净，可以安全同步"
 fi
 
-# Check and add upstream remote
+# Check and add remote
 log_section "配置上游远程仓库"
-if git remote | grep -q "^upstream$"; then
-    CURRENT_UPSTREAM=$(git remote get-url upstream)
-    log_info "已存在 upstream 远程仓库: $CURRENT_UPSTREAM"
+if git remote | grep -q "^${REMOTE}$"; then
+    CURRENT_UPSTREAM=$(git remote get-url "$REMOTE")
+    log_info "已存在 $REMOTE 远程仓库: $CURRENT_UPSTREAM"
     
-    if [ "$CURRENT_UPSTREAM" != "$UPSTREAM_URL" ]; then
+    if [ "$CURRENT_UPSTREAM" != "$UPSTREAM_URL" ] && [ "$REMOTE" = "upstream" ]; then
         log_warning "upstream URL 不匹配"
         echo "  当前: $CURRENT_UPSTREAM"
         echo "  期望: $UPSTREAM_URL"
         
-        if confirm "是否更新 upstream URL?"; then
-            git remote set-url upstream "$UPSTREAM_URL"
+        if [[ $NO_CONFIRM -eq 1 ]] || confirm "是否更新 upstream URL?"; then
+            git remote set-url "$REMOTE" "$UPSTREAM_URL"
             log_success "已更新 upstream URL"
         fi
     fi
 else
-    log_info "添加 upstream 远程仓库..."
-    git remote add upstream "$UPSTREAM_URL"
-    log_success "已添加 upstream 远程仓库: $UPSTREAM_URL"
+    log_info "添加 $REMOTE 远程仓库..."
+    git remote add "$REMOTE" "$UPSTREAM_URL"
+    log_success "已添加 $REMOTE 远程仓库: $UPSTREAM_URL"
 fi
 
 # Fetch upstream
 log_section "获取上游最新代码"
-log_info "正在从 upstream 获取最新代码..."
-if git fetch upstream; then
+log_info "正在从 $REMOTE 获取最新代码..."
+if git fetch "$REMOTE"; then
     log_success "成功获取上游代码"
 else
     log_error "获取上游代码失败"
     exit 1
 fi
 
-# Check which branch to sync
+# If specifying a commit, handle single-commit path
+if [[ -n "$COMMIT_SHA" ]]; then
+  log_section "单提交同步"
+  [[ -z "$BRANCH" ]] && BRANCH="main"
+  log_info "引用分支: $REMOTE/$BRANCH"
+  git fetch "$REMOTE" "$BRANCH" || true
+  if ! git cat-file -e "$COMMIT_SHA"^{commit} 2>/dev/null; then
+    log_warning "本地不存在提交 $COMMIT_SHA，尝试从 $REMOTE 抓取"
+    git fetch "$REMOTE" "$COMMIT_SHA" || true
+  fi
+  if ! git cat-file -e "$COMMIT_SHA"^{commit} 2>/dev/null; then
+    log_error "仍未找到提交 $COMMIT_SHA，请确认 SHA 与远端"
+    exit 1
+  fi
+
+  log_info "将要引入的提交:"
+  git --no-pager show --no-patch --oneline "$COMMIT_SHA" | sed 's/^/  /'
+  [[ $DRY_RUN -eq 1 ]] && { log_info "dry-run: 不执行实际合入"; exit 0; }
+
+  if [[ "$MODE" = "merge" ]]; then
+    log_info "合并模式：git merge --no-ff $COMMIT_SHA"
+    if git merge --no-ff "$COMMIT_SHA" -m "Merge upstream commit $COMMIT_SHA"; then
+      log_success "单提交合并完成"
+    else
+      log_error "合并冲突，请解决后执行: git merge --continue 或 git merge --abort"
+      exit 1
+    fi
+  else
+    log_info "拣选模式：git cherry-pick -x $COMMIT_SHA"
+    if git cherry-pick -x "$COMMIT_SHA"; then
+      log_success "单提交拣选完成"
+    else
+      log_error "拣选冲突，请解决后执行: git cherry-pick --continue 或 git cherry-pick --abort"
+      exit 1
+    fi
+  fi
+
+  log_section "完成"
+  log_success "已合入 $COMMIT_SHA"
+  exit 0
+fi
+
+# ===== 分支同步路径（原有逻辑） =====
+
 log_section "选择同步策略"
-echo ""
-log_info "当前分支: $CURRENT_BRANCH"
-echo ""
-echo "建议:"
-echo "  - 如果在 'dev' 分支，通常同步 'upstream/dev'"
-echo "  - 如果在 'main' 分支，通常同步 'upstream/main'"
-echo "  - 如果在自己的功能分支，同步 'upstream/dev'"
-echo ""
+echo ""; log_info "当前分支: $CURRENT_BRANCH"; echo ""
+echo "建议:"; echo "  - dev 分支同步 upstream/dev"; echo "  - main 分支同步 upstream/main"; echo "  - 其他分支默认 upstream/dev"; echo ""
 
 # Determine target branch
-if [ "$CURRENT_BRANCH" = "dev" ]; then
-    TARGET_BRANCH="upstream/dev"
+if [[ -n "$BRANCH" ]]; then
+  TARGET_BRANCH="$REMOTE/$BRANCH"
+elif [ "$CURRENT_BRANCH" = "dev" ]; then
+  TARGET_BRANCH="$REMOTE/dev"
 elif [ "$CURRENT_BRANCH" = "main" ]; then
-    TARGET_BRANCH="upstream/main"
+  TARGET_BRANCH="$REMOTE/main"
 else
-    # Ask user for target branch
-    echo "可用分支:"
-    git branch -r | grep "upstream/" | sed 's/^/  /'
-    echo ""
-    read -p "请输入要同步的上游分支 (默认: upstream/dev): " USER_BRANCH
-    TARGET_BRANCH=${USER_BRANCH:-upstream/dev}
+  echo "可用分支:"; git branch -r | grep "$REMOTE/" | sed 's/^/  /'
+  echo ""; read -p "请输入要同步的上游分支 (默认: $REMOTE/dev): " USER_BRANCH
+  TARGET_BRANCH=${USER_BRANCH:-$REMOTE/dev}
 fi
 
 log_info "目标分支: $TARGET_BRANCH"
 
 # Verify target branch exists
 if ! git rev-parse --verify "$TARGET_BRANCH" > /dev/null 2>&1; then
-    log_error "分支 '$TARGET_BRANCH' 不存在"
-    exit 1
+  log_error "分支 '$TARGET_BRANCH' 不存在"
+  exit 1
 fi
 
 # Show what will be synced
