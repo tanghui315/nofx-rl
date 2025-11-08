@@ -1,23 +1,53 @@
 package trader
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "net/http"
-    "strconv"
-    "strings"
-    "sync"
-    "time"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-    "github.com/adshao/go-binance/v2/futures"
-    portfolio "github.com/adshao/go-binance/v2/portfolio"
+	"github.com/adshao/go-binance/v2/futures"
+	portfolio "github.com/adshao/go-binance/v2/portfolio"
 )
+
+// getBrOrderID 生成唯一订单ID（合约专用）
+// 格式: x-{BR_ID}{TIMESTAMP}{RANDOM}
+// 合约限制32字符，统一使用此限制以保持一致性
+// 使用纳秒时间戳+随机数确保全局唯一性（冲突概率 < 10^-20）
+func getBrOrderID() string {
+	brID := "KzrpZaP9" // 合约br ID
+
+	// 计算可用空间: 32 - len("x-KzrpZaP9") = 32 - 11 = 21字符
+	// 分配: 13位时间戳 + 8位随机数 = 21字符（完美利用）
+	timestamp := time.Now().UnixNano() % 10000000000000 // 13位纳秒时间戳
+
+	// 生成4字节随机数（8位十六进制）
+	randomBytes := make([]byte, 4)
+	rand.Read(randomBytes)
+	randomHex := hex.EncodeToString(randomBytes)
+
+	// 格式: x-KzrpZaP9{13位时间戳}{8位随机}
+	// 示例: x-KzrpZaP91234567890123abcdef12 (正好31字符)
+	orderID := fmt.Sprintf("x-%s%d%s", brID, timestamp, randomHex)
+
+	// 确保不超过32字符限制（理论上正好31字符）
+	if len(orderID) > 32 {
+		orderID = orderID[:32]
+	}
+
+	return orderID
+}
 
 // FuturesTrader 币安合约交易器
 type FuturesTrader struct {
-    client *futures.Client
-    pClient *portfolio.Client
+	client  *futures.Client
+	pClient *portfolio.Client
 
 	// 余额缓存
 	cachedBalance     map[string]interface{}
@@ -30,28 +60,34 @@ type FuturesTrader struct {
 	positionsCacheMutex sync.RWMutex
 
 	// 缓存有效期（15秒）
-    cacheDuration time.Duration
+	cacheDuration time.Duration
 
-    // 费率缓存（symbol -> {rate, ts}）
-    feeCache      map[string]struct{ rate float64; ts time.Time }
-    feeCacheMutex sync.RWMutex
+	// 费率缓存（symbol -> {rate, ts}）
+	feeCache map[string]struct {
+		rate float64
+		ts   time.Time
+	}
+	feeCacheMutex sync.RWMutex
 }
 
 // NewFuturesTrader 创建合约交易器
 func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
-    client := futures.NewClient(apiKey, secretKey)
-    pclient := portfolio.NewClient(apiKey, secretKey)
-    // 配置 HTTP 客户端以支持代理（遵循 HTTP(S)_PROXY/NO_PROXY 环境变量）
-    client.HTTPClient = &http.Client{ Transport: http.DefaultTransport, Timeout: 30 * time.Second }
-    pclient.HTTPClient = &http.Client{ Transport: http.DefaultTransport, Timeout: 30 * time.Second }
-    // 同步时间，避免 Timestamp ahead 错误
-    syncBinanceServerTime(client)
-    trader := &FuturesTrader{
-        client:        client,
-        pClient:       pclient,
-        cacheDuration: 15 * time.Second, // 15秒缓存
-        feeCache:      make(map[string]struct{ rate float64; ts time.Time }),
-    }
+	client := futures.NewClient(apiKey, secretKey)
+	pclient := portfolio.NewClient(apiKey, secretKey)
+	// 配置 HTTP 客户端以支持代理（遵循 HTTP(S)_PROXY/NO_PROXY 环境变量）
+	client.HTTPClient = &http.Client{Transport: http.DefaultTransport, Timeout: 30 * time.Second}
+	pclient.HTTPClient = &http.Client{Transport: http.DefaultTransport, Timeout: 30 * time.Second}
+	// 同步时间，避免 Timestamp ahead 错误
+	syncBinanceServerTime(client)
+	trader := &FuturesTrader{
+		client:        client,
+		pClient:       pclient,
+		cacheDuration: 15 * time.Second, // 15秒缓存
+		feeCache: make(map[string]struct {
+			rate float64
+			ts   time.Time
+		}),
+	}
 
 	// 设置双向持仓模式（Hedge Mode）
 	// 这是必需的，因为代码中使用了 PositionSide (LONG/SHORT)
@@ -65,133 +101,144 @@ func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 // GetTakerFeeRate 获取该 symbol 的 USDT-M 合约 taker 费率（按账户等级）
 // 使用 /papi/v1/um/commissionRate，缓存 15 分钟
 func (t *FuturesTrader) GetTakerFeeRate(symbol string) (float64, error) {
-    // 命中缓存
-    t.feeCacheMutex.RLock()
-    if v, ok := t.feeCache[strings.ToUpper(symbol)]; ok {
-        if time.Since(v.ts) < 15*time.Minute {
-            t.feeCacheMutex.RUnlock()
-            return v.rate, nil
-        }
-    }
-    t.feeCacheMutex.RUnlock()
+	// 命中缓存
+	t.feeCacheMutex.RLock()
+	if v, ok := t.feeCache[strings.ToUpper(symbol)]; ok {
+		if time.Since(v.ts) < 15*time.Minute {
+			t.feeCacheMutex.RUnlock()
+			return v.rate, nil
+		}
+	}
+	t.feeCacheMutex.RUnlock()
 
-    if t.pClient == nil {
-        return 0, fmt.Errorf("portfolio client not initialized")
-    }
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    res, err := t.pClient.NewGetUMCommissionRateService().Symbol(strings.ToUpper(symbol)).Do(ctx)
-    if err != nil {
-        return 0, err
-    }
-    rate, err := strconv.ParseFloat(res.TakerCommissionRate, 64)
-    if err != nil {
-        return 0, fmt.Errorf("parse takerCommissionRate failed: %w", err)
-    }
-    // 写缓存
-    t.feeCacheMutex.Lock()
-    t.feeCache[strings.ToUpper(symbol)] = struct{ rate float64; ts time.Time }{rate: rate, ts: time.Now()}
-    t.feeCacheMutex.Unlock()
-    return rate, nil
+	if t.pClient == nil {
+		return 0, fmt.Errorf("portfolio client not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := t.pClient.NewGetUMCommissionRateService().Symbol(strings.ToUpper(symbol)).Do(ctx)
+	if err != nil {
+		return 0, err
+	}
+	rate, err := strconv.ParseFloat(res.TakerCommissionRate, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse takerCommissionRate failed: %w", err)
+	}
+	// 写缓存
+	t.feeCacheMutex.Lock()
+	t.feeCache[strings.ToUpper(symbol)] = struct {
+		rate float64
+		ts   time.Time
+	}{rate: rate, ts: time.Now()}
+	t.feeCacheMutex.Unlock()
+	return rate, nil
 }
 
 // GetUserTrades 拉取指定时间窗口内该 symbol 的成交明细（基于合约 /fapi/v1/userTrades）
 // 注意：此接口返回 realizedPnl、commission、commissionAsset、positionSide 等关键字段
 func (t *FuturesTrader) GetUserTrades(symbol string, start, end time.Time, limit int) ([]StdUMTrade, error) {
-    if t.client == nil {
-        return nil, fmt.Errorf("futures client not initialized")
-    }
-    if limit <= 0 || limit > 1000 {
-        limit = 1000
-    }
-    svc := t.client.NewListAccountTradeService().
-        Symbol(strings.ToUpper(symbol)).
-        StartTime(start.UnixMilli()).
-        EndTime(end.UnixMilli()).
-        Limit(limit)
+	if t.client == nil {
+		return nil, fmt.Errorf("futures client not initialized")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	svc := t.client.NewListAccountTradeService().
+		Symbol(strings.ToUpper(symbol)).
+		StartTime(start.UnixMilli()).
+		EndTime(end.UnixMilli()).
+		Limit(limit)
 
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-    res, err := svc.Do(ctx)
-    if err != nil {
-        return nil, err
-    }
-    out := make([]StdUMTrade, 0, len(res))
-    for _, tr := range res {
-        price, _ := strconv.ParseFloat(tr.Price, 64)
-        qty, _ := strconv.ParseFloat(tr.Quantity, 64)
-        rpnl, _ := strconv.ParseFloat(tr.RealizedPnl, 64)
-        comm, _ := strconv.ParseFloat(tr.Commission, 64)
-        out = append(out, StdUMTrade{
-            Symbol:          tr.Symbol,
-            OrderID:         tr.OrderID,
-            Side:            string(tr.Side),
-            Price:           price,
-            Qty:             qty,
-            RealizedPnl:     rpnl,
-            Commission:      comm,
-            CommissionAsset: tr.CommissionAsset,
-            Time:            time.UnixMilli(tr.Time),
-            PositionSide:    string(tr.PositionSide),
-            Maker:           tr.Maker,
-        })
-    }
-    return out, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := svc.Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StdUMTrade, 0, len(res))
+	for _, tr := range res {
+		price, _ := strconv.ParseFloat(tr.Price, 64)
+		qty, _ := strconv.ParseFloat(tr.Quantity, 64)
+		rpnl, _ := strconv.ParseFloat(tr.RealizedPnl, 64)
+		comm, _ := strconv.ParseFloat(tr.Commission, 64)
+		out = append(out, StdUMTrade{
+			Symbol:          tr.Symbol,
+			OrderID:         tr.OrderID,
+			Side:            string(tr.Side),
+			Price:           price,
+			Qty:             qty,
+			RealizedPnl:     rpnl,
+			Commission:      comm,
+			CommissionAsset: tr.CommissionAsset,
+			Time:            time.UnixMilli(tr.Time),
+			PositionSide:    string(tr.PositionSide),
+			Maker:           tr.Maker,
+		})
+	}
+	return out, nil
 }
 
 // GetStopTakePrices 查询该symbol当前挂着的止损/止盈（按持仓方向筛选）。
 func (t *FuturesTrader) GetStopTakePrices(symbol string, positionSide string) (float64, float64, error) {
-    // 列出未完成订单
-    orders, err := t.client.NewListOpenOrdersService().
-        Symbol(symbol).
-        Do(context.Background())
-    if err != nil {
-        return 0, 0, fmt.Errorf("获取未完成订单失败: %w", err)
-    }
+	// 列出未完成订单
+	orders, err := t.client.NewListOpenOrdersService().
+		Symbol(symbol).
+		Do(context.Background())
+	if err != nil {
+		return 0, 0, fmt.Errorf("获取未完成订单失败: %w", err)
+	}
 
-    var sl, tp float64
-    var slSet, tpSet bool
+	var sl, tp float64
+	var slSet, tpSet bool
 
-    // 选择规则：
-    // - 止损（STOP/STOP_MARKET）：
-    //   LONG 选择价格最高的（更接近当前价）；SHORT 选择价格最低的。
-    // - 止盈（TAKE_PROFIT/TAKE_PROFIT_MARKET）：
-    //   LONG 选择价格最低的；SHORT 选择价格最高的（更接近当前价）。
-    for _, o := range orders {
-        // 仅匹配对应方向（Binance返回的 PositionSide 为 "LONG"/"SHORT"/"BOTH"）
-        // 我们优先严格匹配传入的方向；若交易所返回 BOTH，则也纳入考虑（兼容某些账户设置）。
-        if string(o.PositionSide) != positionSide && string(o.PositionSide) != "BOTH" {
-            continue
-        }
-        // 解析价格
-        price, _ := strconv.ParseFloat(o.StopPrice, 64)
-        if price <= 0 {
-            continue
-        }
-        switch o.Type {
-        case futures.OrderTypeStop, futures.OrderTypeStopMarket:
-            if !slSet {
-                sl, slSet = price, true
-            } else {
-                if positionSide == "LONG" {
-                    if price > sl { sl = price }
-                } else {
-                    if price < sl { sl = price }
-                }
-            }
-        case futures.OrderTypeTakeProfit, futures.OrderTypeTakeProfitMarket:
-            if !tpSet {
-                tp, tpSet = price, true
-            } else {
-                if positionSide == "LONG" {
-                    if price < tp { tp = price }
-                } else {
-                    if price > tp { tp = price }
-                }
-            }
-        }
-    }
-    return sl, tp, nil
+	// 选择规则：
+	// - 止损（STOP/STOP_MARKET）：
+	//   LONG 选择价格最高的（更接近当前价）；SHORT 选择价格最低的。
+	// - 止盈（TAKE_PROFIT/TAKE_PROFIT_MARKET）：
+	//   LONG 选择价格最低的；SHORT 选择价格最高的（更接近当前价）。
+	for _, o := range orders {
+		// 仅匹配对应方向（Binance返回的 PositionSide 为 "LONG"/"SHORT"/"BOTH"）
+		// 我们优先严格匹配传入的方向；若交易所返回 BOTH，则也纳入考虑（兼容某些账户设置）。
+		if string(o.PositionSide) != positionSide && string(o.PositionSide) != "BOTH" {
+			continue
+		}
+		// 解析价格
+		price, _ := strconv.ParseFloat(o.StopPrice, 64)
+		if price <= 0 {
+			continue
+		}
+		switch o.Type {
+		case futures.OrderTypeStop, futures.OrderTypeStopMarket:
+			if !slSet {
+				sl, slSet = price, true
+			} else {
+				if positionSide == "LONG" {
+					if price > sl {
+						sl = price
+					}
+				} else {
+					if price < sl {
+						sl = price
+					}
+				}
+			}
+		case futures.OrderTypeTakeProfit, futures.OrderTypeTakeProfitMarket:
+			if !tpSet {
+				tp, tpSet = price, true
+			} else {
+				if positionSide == "LONG" {
+					if price < tp {
+						tp = price
+					}
+				} else {
+					if price > tp {
+						tp = price
+					}
+				}
+			}
+		}
+	}
+	return sl, tp, nil
 }
 
 // setDualSidePosition 设置双向持仓模式（初始化时调用）
@@ -451,13 +498,14 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 		return nil, err
 	}
 
-	// 创建市价买入订单
+	// 创建市价买入订单（使用br ID）
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeBuy).
 		PositionSide(futures.PositionSideTypeLong).
 		Type(futures.OrderTypeMarket).
 		Quantity(quantityStr).
+		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())
 
 	if err != nil {
@@ -505,13 +553,14 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		return nil, err
 	}
 
-	// 创建市价卖出订单
+	// 创建市价卖出订单（使用br ID）
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeSell).
 		PositionSide(futures.PositionSideTypeShort).
 		Type(futures.OrderTypeMarket).
 		Quantity(quantityStr).
+		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())
 
 	if err != nil {
@@ -555,13 +604,14 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 		return nil, err
 	}
 
-	// 创建市价卖出订单（平多）
+	// 创建市价卖出订单（平多，使用br ID）
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeSell).
 		PositionSide(futures.PositionSideTypeLong).
 		Type(futures.OrderTypeMarket).
 		Quantity(quantityStr).
+		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())
 
 	if err != nil {
@@ -609,13 +659,14 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 		return nil, err
 	}
 
-	// 创建市价买入订单（平空）
+	// 创建市价买入订单（平空，使用br ID）
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeBuy).
 		PositionSide(futures.PositionSideTypeShort).
 		Type(futures.OrderTypeMarket).
 		Quantity(quantityStr).
+		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())
 
 	if err != nil {

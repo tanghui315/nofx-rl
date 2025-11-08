@@ -7,7 +7,9 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -77,19 +79,19 @@ type Context struct {
 	OITopDataMap    map[string]*OITopData   `json:"-"` // OI Top数据映射
 	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
-    AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
-    // 最新新闻（可选，控制条数，避免过长），由异常/全权路径注入
-    News            []NewsBrief             `json:"-"`
+	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	// 最新新闻（可选，控制条数，避免过长），由异常/全权路径注入
+	News []NewsBrief `json:"-"`
 }
 
 // NewsBrief 简要新闻条目
 type NewsBrief struct {
-    Symbol      string `json:"symbol,omitempty"`
-    Title       string `json:"title"`
-    Source      string `json:"source,omitempty"`
-    URL         string `json:"url,omitempty"`
-    PublishedAt string `json:"published_at,omitempty"`
-    Summary     string `json:"summary,omitempty"`
+	Symbol      string `json:"symbol,omitempty"`
+	Title       string `json:"title"`
+	Source      string `json:"source,omitempty"`
+	URL         string `json:"url,omitempty"`
+	PublishedAt string `json:"published_at,omitempty"`
+	Summary     string `json:"summary,omitempty"`
 }
 
 // Decision AI的交易决策
@@ -425,42 +427,44 @@ func buildUserPrompt(ctx *Context) string {
 	}
 	sb.WriteString("\n")
 
-	// 夏普比率（直接传值，不要复杂格式化）
-	if ctx.Performance != nil {
-		// 直接从interface{}中提取SharpeRatio
-		type PerformanceData struct {
-			SharpeRatio float64 `json:"sharpe_ratio"`
-		}
-		var perfData PerformanceData
-		if jsonData, err := json.Marshal(ctx.Performance); err == nil {
-			if err := json.Unmarshal(jsonData, &perfData); err == nil {
-				sb.WriteString(fmt.Sprintf("## 📊 夏普比率: %.2f\n\n", perfData.SharpeRatio))
-			}
-		}
+	// 历史表现摘要（精简版，严格控制token）
+	// 支持环境变量控制：NOFX_INCLUDE_PERFORMANCE_SUMMARY=false 可禁用
+	if ctx.Performance != nil && shouldIncludePerformanceSummary() {
+		sb.WriteString(buildPerformanceSummary(ctx.Performance))
 	}
 
-    sb.WriteString("---\n\n")
-    // 新闻速览（若有）
-    if len(ctx.News) > 0 {
-        sb.WriteString("## 🗞️ 新闻速览（最多3条/币种）\n\n")
-        shown := 0
-        for _, n := range ctx.News {
-            if shown >= 6 { break }
-            line := n.Title
-            if n.Source != "" { line += " — " + n.Source }
-            if n.PublishedAt != "" { line += " (" + n.PublishedAt + ")" }
-            if n.Symbol != "" { line = "[" + n.Symbol + "] " + line }
-            sb.WriteString("- " + line + "\n")
-            if n.Summary != "" {
-                // 简要摘要（加长至约200字)
-                summary := n.Summary
-                if len(summary) > 200 { summary = summary[:200] + "…" }
-                sb.WriteString("  ▹ " + summary + "\n")
-            }
-            shown++
-        }
-        sb.WriteString("\n")
-    }
+	sb.WriteString("---\n\n")
+	// 新闻速览（若有）
+	if len(ctx.News) > 0 {
+		sb.WriteString("## 🗞️ 新闻速览（最多3条/币种）\n\n")
+		shown := 0
+		for _, n := range ctx.News {
+			if shown >= 6 {
+				break
+			}
+			line := n.Title
+			if n.Source != "" {
+				line += " — " + n.Source
+			}
+			if n.PublishedAt != "" {
+				line += " (" + n.PublishedAt + ")"
+			}
+			if n.Symbol != "" {
+				line = "[" + n.Symbol + "] " + line
+			}
+			sb.WriteString("- " + line + "\n")
+			if n.Summary != "" {
+				// 简要摘要（加长至约200字)
+				summary := n.Summary
+				if len(summary) > 200 {
+					summary = summary[:200] + "…"
+				}
+				sb.WriteString("  ▹ " + summary + "\n")
+			}
+			shown++
+		}
+		sb.WriteString("\n")
+	}
 	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
 
 	return sb.String()
@@ -816,4 +820,149 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	}
 
 	return nil
+}
+
+// shouldIncludePerformanceSummary 检查是否应该包含历史表现摘要
+// 支持环境变量：NOFX_INCLUDE_PERFORMANCE_SUMMARY=false 可禁用（默认启用）
+func shouldIncludePerformanceSummary() bool {
+	envVal := os.Getenv("NOFX_INCLUDE_PERFORMANCE_SUMMARY")
+	if envVal == "" {
+		return true // 默认启用
+	}
+	// 解析布尔值
+	include, err := strconv.ParseBool(envVal)
+	if err != nil {
+		return true // 解析失败默认启用
+	}
+	return include
+}
+
+// buildPerformanceSummary 构建精简的历史表现摘要（严格控制token消耗）
+// 目标：50-100 tokens，根据上下文复杂度自适应调整
+func buildPerformanceSummary(performance interface{}) string {
+	if performance == nil {
+		return ""
+	}
+
+	// 类型定义（用于反序列化）
+	type perfTradeOutcome struct {
+		Symbol     string  `json:"symbol"`
+		Side       string  `json:"side"`
+		PnL        float64 `json:"pnl"`
+		PnLPct     float64 `json:"pnl_pct"`
+		OpenPrice  float64 `json:"open_price"`
+		ClosePrice float64 `json:"close_price"`
+		Duration   string  `json:"duration"`
+	}
+
+	type perfSymbolPerformance struct {
+		Symbol        string  `json:"symbol"`
+		TotalTrades   int     `json:"total_trades"`
+		WinningTrades int     `json:"winning_trades"`
+		LosingTrades  int     `json:"losing_trades"`
+		WinRate       float64 `json:"win_rate"`
+		TotalPnL      float64 `json:"total_pn_l"`
+	}
+
+	type perfData struct {
+		TotalTrades   int                               `json:"total_trades"`
+		WinningTrades int                               `json:"winning_trades"`
+		LosingTrades  int                               `json:"losing_trades"`
+		WinRate       float64                           `json:"win_rate"`
+		AvgWin        float64                           `json:"avg_win"`
+		AvgLoss       float64                           `json:"avg_loss"`
+		ProfitFactor  float64                           `json:"profit_factor"`
+		SharpeRatio   float64                           `json:"sharpe_ratio"`
+		RecentTrades  []perfTradeOutcome                `json:"recent_trades"`
+		SymbolStats   map[string]*perfSymbolPerformance `json:"symbol_stats"`
+		BestSymbol    string                            `json:"best_symbol"`
+		WorstSymbol   string                            `json:"worst_symbol"`
+	}
+
+	var perf perfData
+	jsonData, err := json.Marshal(performance)
+	if err != nil {
+		return ""
+	}
+	if err := json.Unmarshal(jsonData, &perf); err != nil {
+		return ""
+	}
+
+	// 如果没有交易记录，只显示一行
+	if perf.TotalTrades == 0 {
+		return "历史: 无交易记录\n\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## 📊 历史表现\n")
+
+	// 核心指标（1行，约30 tokens）
+	sb.WriteString(fmt.Sprintf("总计%d笔 | 胜率%.0f%% | 盈亏比%.1f | 夏普%.2f\n",
+		perf.TotalTrades, perf.WinRate, perf.ProfitFactor, perf.SharpeRatio))
+
+	// 自适应详细程度：交易数量少时显示更多细节
+	if perf.TotalTrades <= 5 {
+		// 显示所有交易（最多5笔，约100 tokens）
+		sb.WriteString("最近交易: ")
+		for i, trade := range perf.RecentTrades {
+			if i >= 5 {
+				break
+			}
+			side := "L"
+			if len(trade.Side) > 0 {
+				side = strings.ToUpper(trade.Side)[:1]
+			}
+			sb.WriteString(fmt.Sprintf("%s%s%+.0f%% ",
+				trade.Symbol, side, trade.PnLPct))
+		}
+		sb.WriteString("\n")
+	} else if perf.TotalTrades <= 20 {
+		// 只显示最近3笔亏损（约50 tokens）
+		lossCount := 0
+		losses := ""
+		for _, trade := range perf.RecentTrades {
+			if trade.PnL < 0 && lossCount < 3 {
+				side := "L"
+				if len(trade.Side) > 0 {
+					side = strings.ToUpper(trade.Side)[:1]
+				}
+				losses += fmt.Sprintf("%s%s%.0f%% ",
+					trade.Symbol, side, trade.PnLPct)
+				lossCount++
+			}
+		}
+		if losses != "" {
+			sb.WriteString(fmt.Sprintf("近期亏损: %s\n", losses))
+		}
+
+		// 显示最差币种（1行，约20 tokens）
+		if perf.WorstSymbol != "" && perf.SymbolStats != nil {
+			if worst, ok := perf.SymbolStats[perf.WorstSymbol]; ok && worst.TotalPnL < 0 {
+				sb.WriteString(fmt.Sprintf("警惕: %s 胜率%.0f%% 累亏%.0fU\n",
+					perf.WorstSymbol, worst.WinRate, worst.TotalPnL))
+			}
+		}
+	} else {
+		// 交易数量多时，只显示统计指标（约30 tokens）
+		avgLoss := perf.AvgLoss
+		if avgLoss < 0 {
+			avgLoss = -avgLoss
+		}
+		sb.WriteString(fmt.Sprintf("平均盈%.0fU 亏%.0fU | ",
+			perf.AvgWin, avgLoss))
+
+		// 只显示最差币种
+		if perf.WorstSymbol != "" && perf.SymbolStats != nil {
+			if worst, ok := perf.SymbolStats[perf.WorstSymbol]; ok && worst.TotalPnL < 0 {
+				sb.WriteString(fmt.Sprintf("警惕%s胜率%.0f%%\n", perf.WorstSymbol, worst.WinRate))
+			} else {
+				sb.WriteString("\n")
+			}
+		} else {
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
 }

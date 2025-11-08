@@ -1,25 +1,25 @@
 package api
 
 import (
-    "encoding/json"
-    "fmt"
-    "math"
-    "log"
-    "net"
-    "net/http"
-    "sort"
-    "nofx/auth"
-    "nofx/config"
-    "nofx/decision"
-    "nofx/manager"
-    "nofx/logger"
-    "nofx/market"
-    "nofx/news"
-    traderpkg "nofx/trader"
-    "os"
-    "strconv"
-    "strings"
-    "time"
+	"encoding/json"
+	"fmt"
+	"log"
+	"math"
+	"net"
+	"net/http"
+	"nofx/auth"
+	"nofx/config"
+	"nofx/decision"
+	"nofx/logger"
+	"nofx/manager"
+	"nofx/market"
+	"nofx/news"
+	traderpkg "nofx/trader"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -90,21 +90,21 @@ func (s *Server) setupRoutes() {
 		// 系统配置（无需认证，用于前端判断是否管理员模式/注册是否开启）
 		api.GET("/config", s.handleGetSystemConfig)
 
-        // 系统提示词模板管理（无需认证）- 仅在非管理员模式下开放
-        if !auth.IsAdminMode() {
-            api.GET("/prompt-templates", s.handleGetPromptTemplates)
-            api.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
-        }
+		// 系统提示词模板管理（无需认证）- 仅在非管理员模式下开放
+		if !auth.IsAdminMode() {
+			api.GET("/prompt-templates", s.handleGetPromptTemplates)
+			api.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
+		}
 
-        // 公开的竞赛/统计数据（无需认证）- 仅在非管理员模式下开放
-        if !auth.IsAdminMode() {
-            api.GET("/traders", s.handlePublicTraderList)
-            api.GET("/competition", s.handlePublicCompetition)
-            api.GET("/top-traders", s.handleTopTraders)
-            api.GET("/equity-history", s.handleEquityHistory)
-            api.POST("/equity-history-batch", s.handleEquityHistoryBatch)
-            api.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
-        }
+		// 公开的竞赛/统计数据（无需认证）- 仅在非管理员模式下开放
+		if !auth.IsAdminMode() {
+			api.GET("/traders", s.handlePublicTraderList)
+			api.GET("/competition", s.handlePublicCompetition)
+			api.GET("/top-traders", s.handleTopTraders)
+			api.GET("/equity-history", s.handleEquityHistory)
+			api.POST("/equity-history-batch", s.handleEquityHistoryBatch)
+			api.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
+		}
 
 		// 仅在非管理员模式下的路由
 		if !auth.IsAdminMode() {
@@ -156,19 +156,19 @@ func (s *Server) setupRoutes() {
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
 			protected.GET("/performance", s.handlePerformance)
-			protected.GET("/equity-history", s.handleEquityHistory) // 收益率历史数据（管理员模式下需要认证）
+			protected.GET("/equity-history", s.handleEquityHistory)             // 收益率历史数据（管理员模式下需要认证）
 			protected.POST("/equity-history-batch", s.handleEquityHistoryBatch) // 批量获取历史数据
-			
+
 			// 系统提示词模板管理（管理员模式下需要认证）
 			protected.GET("/prompt-templates", s.handleGetPromptTemplates)
 			protected.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
-			
+
 			// 竞赛数据（管理员模式下需要认证）
 			protected.GET("/competition", s.handlePublicCompetition)
 			protected.GET("/traders", s.handlePublicTraderList)
 			protected.GET("/top-traders", s.handleTopTraders)
 			protected.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
-			
+
 			// 异常监控配置
 			protected.GET("/anomaly/config", s.handleGetAnomalyConfig)
 			protected.PUT("/anomaly/config", s.handleUpdateAnomalyConfig)
@@ -402,9 +402,9 @@ type CreateTraderRequest struct {
 	OverrideBasePrompt   bool    `json:"override_base_prompt"`
 	SystemPromptTemplate string  `json:"system_prompt_template"` // 系统提示词模板名称
 	IsCrossMargin        *bool   `json:"is_cross_margin"`        // 指针类型，nil表示使用默认值true
-    UseCoinPool          bool    `json:"use_coin_pool"`
-    UseOITop             bool    `json:"use_oi_top"`
-    IncludeNews          bool    `json:"include_news"`
+	UseCoinPool          bool    `json:"use_coin_pool"`
+	UseOITop             bool    `json:"use_oi_top"`
+	IncludeNews          bool    `json:"include_news"`
 }
 
 type ModelConfig struct {
@@ -546,20 +546,20 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		log.Printf("⚠️ 交易所 %s 未启用，使用用户输入的初始资金", req.ExchangeID)
 	} else {
 		// 根据交易所类型创建临时 trader 查询余额
-		var tempTrader trader.Trader
+		var tempTrader traderpkg.Trader
 		var createErr error
 
 		switch req.ExchangeID {
 		case "binance":
-			tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey)
+			tempTrader = traderpkg.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey)
 		case "hyperliquid":
-			tempTrader, createErr = trader.NewHyperliquidTrader(
+			tempTrader, createErr = traderpkg.NewHyperliquidTrader(
 				exchangeCfg.APIKey, // private key
 				exchangeCfg.HyperliquidWalletAddr,
 				exchangeCfg.Testnet,
 			)
 		case "aster":
-			tempTrader, createErr = trader.NewAsterTrader(
+			tempTrader, createErr = traderpkg.NewAsterTrader(
 				exchangeCfg.AsterUser,
 				exchangeCfg.AsterSigner,
 				exchangeCfg.AsterPrivateKey,
@@ -575,51 +575,51 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 			balanceInfo, balanceErr := tempTrader.GetBalance()
 			if balanceErr != nil {
 				log.Printf("⚠️ 查询交易所余额失败，使用用户输入的初始资金: %v", balanceErr)
-            } else {
-                // 优先使用“净值”作为基线：wallet + unrealized
-                if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
-                    if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
-                        actualBalance = wallet + unpnl
-                        log.Printf("✓ 查询到交易所净值(钱包+未实现): %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
-                    }
-                }
-                // 退化到 available_balance 或 balance
-                if actualBalance <= 0 {
-                    if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
-                        actualBalance = availableBalance
-                        log.Printf("✓ 查询到交易所可用余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
-                    } else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
-                        actualBalance = totalBalance
-                        log.Printf("✓ 查询到交易所余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
-                    } else {
-                        log.Printf("⚠️ 无法从余额信息中提取净值/余额，使用用户输入的初始资金")
-                    }
-                }
-            }
+			} else {
+				// 优先使用“净值”作为基线：wallet + unrealized
+				if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
+					if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
+						actualBalance = wallet + unpnl
+						log.Printf("✓ 查询到交易所净值(钱包+未实现): %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
+					}
+				}
+				// 退化到 available_balance 或 balance
+				if actualBalance <= 0 {
+					if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
+						actualBalance = availableBalance
+						log.Printf("✓ 查询到交易所可用余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
+					} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
+						actualBalance = totalBalance
+						log.Printf("✓ 查询到交易所余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
+					} else {
+						log.Printf("⚠️ 无法从余额信息中提取净值/余额，使用用户输入的初始资金")
+					}
+				}
+			}
 		}
 	}
 
 	// 创建交易员配置（数据库实体）
-    trader := &config.TraderRecord{
-        ID:                   traderID,
-        UserID:               userID,
-        Name:                 req.Name,
-        AIModelID:            req.AIModelID,
-        ExchangeID:           req.ExchangeID,
-        InitialBalance:       actualBalance, // 使用实际查询的余额
-        BTCETHLeverage:       btcEthLeverage,
-        AltcoinLeverage:      altcoinLeverage,
-        TradingSymbols:       req.TradingSymbols,
-        UseCoinPool:          req.UseCoinPool,
-        UseOITop:             req.UseOITop,
-        CustomPrompt:         req.CustomPrompt,
-        OverrideBasePrompt:   req.OverrideBasePrompt,
-        SystemPromptTemplate: systemPromptTemplate,
-        IsCrossMargin:        isCrossMargin,
-        IncludeNews:          req.IncludeNews,
-        ScanIntervalMinutes:  scanIntervalMinutes,
-        IsRunning:            false,
-    }
+	trader := &config.TraderRecord{
+		ID:                   traderID,
+		UserID:               userID,
+		Name:                 req.Name,
+		AIModelID:            req.AIModelID,
+		ExchangeID:           req.ExchangeID,
+		InitialBalance:       actualBalance, // 使用实际查询的余额
+		BTCETHLeverage:       btcEthLeverage,
+		AltcoinLeverage:      altcoinLeverage,
+		TradingSymbols:       req.TradingSymbols,
+		UseCoinPool:          req.UseCoinPool,
+		UseOITop:             req.UseOITop,
+		CustomPrompt:         req.CustomPrompt,
+		OverrideBasePrompt:   req.OverrideBasePrompt,
+		SystemPromptTemplate: systemPromptTemplate,
+		IsCrossMargin:        isCrossMargin,
+		IncludeNews:          req.IncludeNews,
+		ScanIntervalMinutes:  scanIntervalMinutes,
+		IsRunning:            false,
+	}
 
 	// 保存到数据库
 	err = s.database.CreateTrader(trader)
@@ -647,19 +647,19 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 // UpdateTraderRequest 更新交易员请求
 type UpdateTraderRequest struct {
-    Name                string  `json:"name" binding:"required"`
-    AIModelID           string  `json:"ai_model_id" binding:"required"`
-    ExchangeID          string  `json:"exchange_id" binding:"required"`
-    InitialBalance      float64 `json:"initial_balance"`
-    ScanIntervalMinutes int     `json:"scan_interval_minutes"`
-    BTCETHLeverage      int     `json:"btc_eth_leverage"`
-    AltcoinLeverage     int     `json:"altcoin_leverage"`
-    TradingSymbols      string  `json:"trading_symbols"`
-    CustomPrompt        string  `json:"custom_prompt"`
-    OverrideBasePrompt  bool    `json:"override_base_prompt"`
-    IsCrossMargin       *bool   `json:"is_cross_margin"`
-    SystemPromptTemplate string  `json:"system_prompt_template"`
-    IncludeNews         bool    `json:"include_news"`
+	Name                 string  `json:"name" binding:"required"`
+	AIModelID            string  `json:"ai_model_id" binding:"required"`
+	ExchangeID           string  `json:"exchange_id" binding:"required"`
+	InitialBalance       float64 `json:"initial_balance"`
+	ScanIntervalMinutes  int     `json:"scan_interval_minutes"`
+	BTCETHLeverage       int     `json:"btc_eth_leverage"`
+	AltcoinLeverage      int     `json:"altcoin_leverage"`
+	TradingSymbols       string  `json:"trading_symbols"`
+	CustomPrompt         string  `json:"custom_prompt"`
+	OverrideBasePrompt   bool    `json:"override_base_prompt"`
+	IsCrossMargin        *bool   `json:"is_cross_margin"`
+	SystemPromptTemplate string  `json:"system_prompt_template"`
+	IncludeNews          bool    `json:"include_news"`
 }
 
 // handleUpdateTrader 更新交易员配置
@@ -693,11 +693,11 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		return
 	}
 
-    // 设置默认值
-    isCrossMargin := existingTrader.IsCrossMargin // 保持原值
-    if req.IsCrossMargin != nil {
-        isCrossMargin = *req.IsCrossMargin
-    }
+	// 设置默认值
+	isCrossMargin := existingTrader.IsCrossMargin // 保持原值
+	if req.IsCrossMargin != nil {
+		isCrossMargin = *req.IsCrossMargin
+	}
 
 	// 设置杠杆默认值
 	btcEthLeverage := req.BTCETHLeverage
@@ -717,31 +717,31 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		scanIntervalMinutes = 3
 	}
 
-    // 系统提示词模板：如果请求提供则更新，否则保持原值
-    systemPromptTemplate := existingTrader.SystemPromptTemplate
-    if strings.TrimSpace(req.SystemPromptTemplate) != "" {
-        systemPromptTemplate = req.SystemPromptTemplate
-    }
+	// 系统提示词模板：如果请求提供则更新，否则保持原值
+	systemPromptTemplate := existingTrader.SystemPromptTemplate
+	if strings.TrimSpace(req.SystemPromptTemplate) != "" {
+		systemPromptTemplate = req.SystemPromptTemplate
+	}
 
-    // 更新交易员配置
-    trader := &config.TraderRecord{
-        ID:                   traderID,
-        UserID:               userID,
-        Name:                 req.Name,
-        AIModelID:            req.AIModelID,
-        ExchangeID:           req.ExchangeID,
-        InitialBalance:       req.InitialBalance,
-        BTCETHLeverage:       btcEthLeverage,
-        AltcoinLeverage:      altcoinLeverage,
-        TradingSymbols:       req.TradingSymbols,
-        CustomPrompt:         req.CustomPrompt,
-        OverrideBasePrompt:   req.OverrideBasePrompt,
-        SystemPromptTemplate: systemPromptTemplate,
-        IsCrossMargin:        isCrossMargin,
-        IncludeNews:          req.IncludeNews,
-        ScanIntervalMinutes:  scanIntervalMinutes,
-        IsRunning:            existingTrader.IsRunning, // 保持原值
-    }
+	// 更新交易员配置
+	trader := &config.TraderRecord{
+		ID:                   traderID,
+		UserID:               userID,
+		Name:                 req.Name,
+		AIModelID:            req.AIModelID,
+		ExchangeID:           req.ExchangeID,
+		InitialBalance:       req.InitialBalance,
+		BTCETHLeverage:       btcEthLeverage,
+		AltcoinLeverage:      altcoinLeverage,
+		TradingSymbols:       req.TradingSymbols,
+		CustomPrompt:         req.CustomPrompt,
+		OverrideBasePrompt:   req.OverrideBasePrompt,
+		SystemPromptTemplate: systemPromptTemplate,
+		IsCrossMargin:        isCrossMargin,
+		IncludeNews:          req.IncludeNews,
+		ScanIntervalMinutes:  scanIntervalMinutes,
+		IsRunning:            existingTrader.IsRunning, // 保持原值
+	}
 
 	// 更新数据库
 	err = s.database.UpdateTrader(trader)
@@ -925,20 +925,20 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	}
 
 	// 创建临时 trader 查询余额
-	var tempTrader trader.Trader
+	var tempTrader traderpkg.Trader
 	var createErr error
 
 	switch traderConfig.ExchangeID {
 	case "binance":
-		tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey)
+		tempTrader = traderpkg.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey)
 	case "hyperliquid":
-		tempTrader, createErr = trader.NewHyperliquidTrader(
+		tempTrader, createErr = traderpkg.NewHyperliquidTrader(
 			exchangeCfg.APIKey,
 			exchangeCfg.HyperliquidWalletAddr,
 			exchangeCfg.Testnet,
 		)
 	case "aster":
-		tempTrader, createErr = trader.NewAsterTrader(
+		tempTrader, createErr = traderpkg.NewAsterTrader(
 			exchangeCfg.AsterUser,
 			exchangeCfg.AsterSigner,
 			exchangeCfg.AsterPrivateKey,
@@ -962,26 +962,26 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 		return
 	}
 
-    // 优先计算“净值”= 钱包 + 未实现盈亏
-    var actualBalance float64
-    if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
-        if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
-            actualBalance = wallet + unpnl
-        }
-    }
-    // 退化到 available/balance
-    if actualBalance <= 0 {
-        if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
-            actualBalance = availableBalance
-        } else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
-            actualBalance = availableBalance
-        } else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
-            actualBalance = totalBalance
-        } else {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取账户净值/余额"})
-            return
-        }
-    }
+	// 优先计算“净值”= 钱包 + 未实现盈亏
+	var actualBalance float64
+	if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
+		if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
+			actualBalance = wallet + unpnl
+		}
+	}
+	// 退化到 available/balance
+	if actualBalance <= 0 {
+		if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
+			actualBalance = availableBalance
+		} else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
+			actualBalance = availableBalance
+		} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
+			actualBalance = totalBalance
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取账户净值/余额"})
+			return
+		}
+	}
 
 	oldBalance := traderConfig.InitialBalance
 
@@ -1173,12 +1173,12 @@ func (s *Server) handleTraderList(c *gin.Context) {
 		// 返回完整的 AIModelID（如 "admin_deepseek"），不要截断
 		// 前端需要完整 ID 来验证模型是否存在（与 handleGetTraderConfig 保持一致）
 		result = append(result, map[string]interface{}{
-			"trader_id":       trader.ID,
-			"trader_name":     trader.Name,
-			"ai_model":        trader.AIModelID, // 使用完整 ID
-			"exchange_id":     trader.ExchangeID,
-			"is_running":      isRunning,
-			"initial_balance": trader.InitialBalance,
+			"trader_id":              trader.ID,
+			"trader_name":            trader.Name,
+			"ai_model":               trader.AIModelID, // 使用完整 ID
+			"exchange_id":            trader.ExchangeID,
+			"is_running":             isRunning,
+			"initial_balance":        trader.InitialBalance,
 			"system_prompt_template": trader.SystemPromptTemplate,
 		})
 	}
@@ -1214,25 +1214,25 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 	// 返回完整的模型ID，不做转换，保持与前端模型列表一致
 	aiModelID := traderConfig.AIModelID
 
-    result := map[string]interface{}{
-        "trader_id":             traderConfig.ID,
-        "trader_name":           traderConfig.Name,
-        "ai_model":              aiModelID,
-        "exchange_id":           traderConfig.ExchangeID,
-        "initial_balance":       traderConfig.InitialBalance,
-        "scan_interval_minutes": traderConfig.ScanIntervalMinutes,
-        "btc_eth_leverage":      traderConfig.BTCETHLeverage,
-        "altcoin_leverage":      traderConfig.AltcoinLeverage,
-        "trading_symbols":       traderConfig.TradingSymbols,
-        "custom_prompt":         traderConfig.CustomPrompt,
-        "override_base_prompt":  traderConfig.OverrideBasePrompt,
-        "system_prompt_template": traderConfig.SystemPromptTemplate,
-        "is_cross_margin":       traderConfig.IsCrossMargin,
-        "use_coin_pool":         traderConfig.UseCoinPool,
-        "use_oi_top":            traderConfig.UseOITop,
-        "include_news":          traderConfig.IncludeNews,
-        "is_running":            isRunning,
-    }
+	result := map[string]interface{}{
+		"trader_id":              traderConfig.ID,
+		"trader_name":            traderConfig.Name,
+		"ai_model":               aiModelID,
+		"exchange_id":            traderConfig.ExchangeID,
+		"initial_balance":        traderConfig.InitialBalance,
+		"scan_interval_minutes":  traderConfig.ScanIntervalMinutes,
+		"btc_eth_leverage":       traderConfig.BTCETHLeverage,
+		"altcoin_leverage":       traderConfig.AltcoinLeverage,
+		"trading_symbols":        traderConfig.TradingSymbols,
+		"custom_prompt":          traderConfig.CustomPrompt,
+		"override_base_prompt":   traderConfig.OverrideBasePrompt,
+		"system_prompt_template": traderConfig.SystemPromptTemplate,
+		"is_cross_margin":        traderConfig.IsCrossMargin,
+		"use_coin_pool":          traderConfig.UseCoinPool,
+		"use_oi_top":             traderConfig.UseOITop,
+		"include_news":           traderConfig.IncludeNews,
+		"is_running":             isRunning,
+	}
 
 	c.JSON(http.StatusOK, result)
 }
@@ -1316,43 +1316,43 @@ func (s *Server) handlePositions(c *gin.Context) {
 // handleClosePosition 手动平仓
 func (s *Server) handleClosePosition(c *gin.Context) {
 	userID := c.GetString("user_id")
-	
+
 	// 解析请求体
 	var req struct {
 		TraderID string  `json:"trader_id" binding:"required"`
 		Symbol   string  `json:"symbol" binding:"required"`
 		Side     string  `json:"side" binding:"required"` // "long" 或 "short"
-		Quantity float64 `json:"quantity"`                 // 可选，0表示全部平仓
+		Quantity float64 `json:"quantity"`                // 可选，0表示全部平仓
 	}
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
 		return
 	}
-	
+
 	// 验证持仓方向
 	if req.Side != "long" && req.Side != "short" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "持仓方向必须是 'long' 或 'short'"})
 		return
 	}
-	
+
 	// 校验交易员是否属于当前用户
 	_, _, _, err := s.database.GetTraderConfig(userID, req.TraderID)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "交易员不存在或无访问权限"})
 		return
 	}
-	
+
 	// 获取交易员实例
 	trader, err := s.traderManager.GetTrader(req.TraderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "交易员不存在"})
 		return
 	}
-	
+
 	log.Printf("📋 收到平仓请求 [用户=%s, 交易员=%s, 币种=%s, 方向=%s, 数量=%.4f]",
 		userID, req.TraderID, req.Symbol, req.Side, req.Quantity)
-	
+
 	// 执行平仓
 	result, err := trader.ClosePosition(req.Symbol, req.Side, req.Quantity)
 	if err != nil {
@@ -1362,7 +1362,7 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	log.Printf("✓ 平仓成功 [%s %s]", req.Symbol, req.Side)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "平仓成功",
@@ -1573,194 +1573,263 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		return
 	}
 
-    // 支持自定义窗口：默认100周期，可通过 ?lookback=300 调整（上限1000，防止性能问题）
-    lookback := 100
-    if v := c.Query("lookback"); v != "" {
-        if n, err := strconv.Atoi(v); err == nil {
-            if n > 0 && n <= 1000 {
-                lookback = n
-            }
-        }
-    }
-    // 构造费率解析器：优先调用交易员真实费率查询，回退到环境/默认
-    exch := trader.GetExchange()
-    resolver := func(symbol string) float64 {
-        // 优先尝试真实费率（如果底层交易器实现了）
-        if r := trader.GetTakerFeeRate(symbol); r > 0 {
-            return r
-        }
-        key := "NOFX_TAKER_FEE_RATE_" + strings.ToUpper(exch)
-        if v := os.Getenv(key); v != "" {
-            if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
-                return f
-            }
-        }
-        if v := os.Getenv("NOFX_TAKER_FEE_RATE"); v != "" {
-            if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
-                return f
-            }
-        }
-        // 默认：不同交易所可设置略不同的兜底
-        switch strings.ToLower(exch) {
-        case "binance":
-            return 0.0004
-        case "hyperliquid":
-            return 0.0005
-        case "aster":
-            return 0.0005
-        default:
-            return 0.0004
-        }
-    }
-    // 优先尝试：基于交易所 userTrades 的对账（更准确，包含手续费与强平/止损）
-    // 1) 收集时间窗口与涉及的 symbol 集合
-    records, _ := trader.GetDecisionLogger().GetLatestRecords(lookback)
-    var (
-        startTime time.Time
-        endTime   time.Time
-    )
-    symSet := map[string]struct{}{}
-    if len(records) > 0 {
-        startTime = records[0].Timestamp
-        endTime = records[len(records)-1].Timestamp
-        for _, r := range records {
-            for _, d := range r.Decisions { if d.Symbol != "" { symSet[strings.ToUpper(d.Symbol)] = struct{}{} } }
-        }
-    } else {
-        // 退化：按 lookback*3m 估一个时间窗
-        endTime = time.Now()
-        startTime = endTime.Add(-time.Duration(lookback*3) * time.Minute)
-    }
-    // 构造符号列表
-    var symbols []string
-    for ssym := range symSet { symbols = append(symbols, ssym) }
-    // 2) 拉取交易并计算绩效
-    exchangeAnalysis, exErr := func() (*logger.PerformanceAnalysis, error) {
-        if len(symbols) == 0 { return nil, fmt.Errorf("no symbols from decisions") }
-        priceCache := map[string]float64{}
-        priceOf := func(asset string) (float64, error) {
-            a := strings.ToUpper(strings.TrimSpace(asset))
-            if a == "" || a == "USDT" { return 1, nil }
-            if v, ok := priceCache[a]; ok { return v, nil }
-            // 通过现有市场层转换资产到 USDT
-            data, err := market.Get(a + "USDT")
-            if err != nil { return 0, err }
-            priceCache[a] = data.CurrentPrice
-            return data.CurrentPrice, nil
-        }
+	// 支持自定义窗口：默认100周期，可通过 ?lookback=300 调整（上限1000，防止性能问题）
+	lookback := 100
+	if v := c.Query("lookback"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n > 0 && n <= 1000 {
+				lookback = n
+			}
+		}
+	}
+	// 构造费率解析器：优先调用交易员真实费率查询，回退到环境/默认
+	exch := trader.GetExchange()
+	resolver := func(symbol string) float64 {
+		// 优先尝试真实费率（如果底层交易器实现了）
+		if r := trader.GetTakerFeeRate(symbol); r > 0 {
+			return r
+		}
+		key := "NOFX_TAKER_FEE_RATE_" + strings.ToUpper(exch)
+		if v := os.Getenv(key); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+				return f
+			}
+		}
+		if v := os.Getenv("NOFX_TAKER_FEE_RATE"); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+				return f
+			}
+		}
+		// 默认：不同交易所可设置略不同的兜底
+		switch strings.ToLower(exch) {
+		case "binance":
+			return 0.0004
+		case "hyperliquid":
+			return 0.0005
+		case "aster":
+			return 0.0005
+		default:
+			return 0.0004
+		}
+	}
+	// 优先尝试：基于交易所 userTrades 的对账（更准确，包含手续费与强平/止损）
+	// 1) 收集时间窗口与涉及的 symbol 集合
+	records, _ := trader.GetDecisionLogger().GetLatestRecords(lookback)
+	var (
+		startTime time.Time
+		endTime   time.Time
+	)
+	symSet := map[string]struct{}{}
+	if len(records) > 0 {
+		startTime = records[0].Timestamp
+		endTime = records[len(records)-1].Timestamp
+		for _, r := range records {
+			for _, d := range r.Decisions {
+				if d.Symbol != "" {
+					symSet[strings.ToUpper(d.Symbol)] = struct{}{}
+				}
+			}
+		}
+	} else {
+		// 退化：按 lookback*3m 估一个时间窗
+		endTime = time.Now()
+		startTime = endTime.Add(-time.Duration(lookback*3) * time.Minute)
+	}
+	// 构造符号列表
+	var symbols []string
+	for ssym := range symSet {
+		symbols = append(symbols, ssym)
+	}
+	// 2) 拉取交易并计算绩效
+	exchangeAnalysis, exErr := func() (*logger.PerformanceAnalysis, error) {
+		if len(symbols) == 0 {
+			return nil, fmt.Errorf("no symbols from decisions")
+		}
+		priceCache := map[string]float64{}
+		priceOf := func(asset string) (float64, error) {
+			a := strings.ToUpper(strings.TrimSpace(asset))
+			if a == "" || a == "USDT" {
+				return 1, nil
+			}
+			if v, ok := priceCache[a]; ok {
+				return v, nil
+			}
+			// 通过现有市场层转换资产到 USDT
+			data, err := market.Get(a + "USDT")
+			if err != nil {
+				return 0, err
+			}
+			priceCache[a] = data.CurrentPrice
+			return data.CurrentPrice, nil
+		}
 
-        // 收集所有 trades
-        type key struct{ sym, side string }
-        grouped := map[key][]traderpkg.StdUMTrade{}
-        for _, sym := range symbols {
-            trs, err := trader.GetUserTrades(sym, startTime, endTime, 1000)
-            if err != nil { return nil, err }
-            for _, t := range trs {
-                k := key{strings.ToUpper(t.Symbol), strings.ToUpper(t.PositionSide)}
-                grouped[k] = append(grouped[k], t)
-            }
-        }
-        // 聚合为闭环交易周期
-        analysis := &logger.PerformanceAnalysis{ RecentTrades: []logger.TradeOutcome{}, SymbolStats: map[string]*logger.SymbolPerformance{} }
-        for k, list := range grouped {
-            // 按时间升序
-            sort.Slice(list, func(i, j int) bool { return list[i].Time.Before(list[j].Time) })
-            qty := 0.0
-            entryNotional := 0.0
-            entryQty := 0.0
-            openTime := time.Time{}
-            realized := 0.0
-            feeUSDT := 0.0
-            for _, tr := range list {
-                // 佣金换算为 USDT
-                if tr.Commission > 0 {
-                    if px, err := priceOf(tr.CommissionAsset); err == nil && px > 0 {
-                        feeUSDT += tr.Commission * px
-                    }
-                }
-                // 判断进出场：
-                isEntry := (k.side == "LONG" && strings.ToUpper(tr.Side) == "BUY") || (k.side == "SHORT" && strings.ToUpper(tr.Side) == "SELL")
-                // 数量更新（以正数度量）
-                q := tr.Qty
-                if k.side == "LONG" {
-                    if strings.ToUpper(tr.Side) == "BUY" { qty += q } else { qty -= q }
-                } else { // SHORT
-                    if strings.ToUpper(tr.Side) == "SELL" { qty += q } else { qty -= q }
-                }
-                if isEntry {
-                    if entryQty == 0 { openTime = tr.Time }
-                    entryNotional += tr.Price * q
-                    entryQty += q
-                }
-                // 实现盈亏直接累加
-                realized += tr.RealizedPnl
+		// 收集所有 trades
+		type key struct{ sym, side string }
+		grouped := map[key][]traderpkg.StdUMTrade{}
+		for _, sym := range symbols {
+			trs, err := trader.GetUserTrades(sym, startTime, endTime, 1000)
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range trs {
+				k := key{strings.ToUpper(t.Symbol), strings.ToUpper(t.PositionSide)}
+				grouped[k] = append(grouped[k], t)
+			}
+		}
+		// 聚合为闭环交易周期
+		analysis := &logger.PerformanceAnalysis{RecentTrades: []logger.TradeOutcome{}, SymbolStats: map[string]*logger.SymbolPerformance{}}
+		for k, list := range grouped {
+			// 按时间升序
+			sort.Slice(list, func(i, j int) bool { return list[i].Time.Before(list[j].Time) })
+			qty := 0.0
+			entryNotional := 0.0
+			entryQty := 0.0
+			openTime := time.Time{}
+			realized := 0.0
+			feeUSDT := 0.0
+			for _, tr := range list {
+				// 佣金换算为 USDT
+				if tr.Commission > 0 {
+					if px, err := priceOf(tr.CommissionAsset); err == nil && px > 0 {
+						feeUSDT += tr.Commission * px
+					}
+				}
+				// 判断进出场：
+				isEntry := (k.side == "LONG" && strings.ToUpper(tr.Side) == "BUY") || (k.side == "SHORT" && strings.ToUpper(tr.Side) == "SELL")
+				// 数量更新（以正数度量）
+				q := tr.Qty
+				if k.side == "LONG" {
+					if strings.ToUpper(tr.Side) == "BUY" {
+						qty += q
+					} else {
+						qty -= q
+					}
+				} else { // SHORT
+					if strings.ToUpper(tr.Side) == "SELL" {
+						qty += q
+					} else {
+						qty -= q
+					}
+				}
+				if isEntry {
+					if entryQty == 0 {
+						openTime = tr.Time
+					}
+					entryNotional += tr.Price * q
+					entryQty += q
+				}
+				// 实现盈亏直接累加
+				realized += tr.RealizedPnl
 
-                // 闭环（仓位归零）
-                if math.Abs(qty) < 1e-9 && entryQty > 0 {
-                    openPrice := entryNotional / entryQty
-                    positionValue := openPrice * entryQty
-                    // 无法精准获知杠杆/保证金，保持0以避免误导
-                    outcome := logger.TradeOutcome{
-                        Symbol:        k.sym,
-                        Side:          strings.ToLower(k.side),
-                        Quantity:      entryQty,
-                        Leverage:      0,
-                        OpenPrice:     openPrice,
-                        ClosePrice:    tr.Price,
-                        PositionValue: positionValue,
-                        MarginUsed:    0,
-                        PnL:           realized - feeUSDT,
-                        PnLPct:        0,
-                        Duration:      tr.Time.Sub(openTime).String(),
-                        OpenTime:      openTime,
-                        CloseTime:     tr.Time,
-                        WasStopLoss:   false,
-                    }
-                    analysis.RecentTrades = append(analysis.RecentTrades, outcome)
-                    analysis.TotalTrades++
-                    if outcome.PnL > 0 { analysis.WinningTrades++; analysis.AvgWin += outcome.PnL } else if outcome.PnL < 0 { analysis.LosingTrades++; analysis.AvgLoss += outcome.PnL }
-                    if _, ok := analysis.SymbolStats[k.sym]; !ok { analysis.SymbolStats[k.sym] = &logger.SymbolPerformance{ Symbol: k.sym } }
-                    st := analysis.SymbolStats[k.sym]; st.TotalTrades++; st.TotalPnL += outcome.PnL; if outcome.PnL > 0 { st.WinningTrades++ } else if outcome.PnL < 0 { st.LosingTrades++ }
+				// 闭环（仓位归零）
+				if math.Abs(qty) < 1e-9 && entryQty > 0 {
+					openPrice := entryNotional / entryQty
+					positionValue := openPrice * entryQty
+					// 无法精准获知杠杆/保证金，保持0以避免误导
+					outcome := logger.TradeOutcome{
+						Symbol:        k.sym,
+						Side:          strings.ToLower(k.side),
+						Quantity:      entryQty,
+						Leverage:      0,
+						OpenPrice:     openPrice,
+						ClosePrice:    tr.Price,
+						PositionValue: positionValue,
+						MarginUsed:    0,
+						PnL:           realized - feeUSDT,
+						PnLPct:        0,
+						Duration:      tr.Time.Sub(openTime).String(),
+						OpenTime:      openTime,
+						CloseTime:     tr.Time,
+						WasStopLoss:   false,
+					}
+					analysis.RecentTrades = append(analysis.RecentTrades, outcome)
+					analysis.TotalTrades++
+					if outcome.PnL > 0 {
+						analysis.WinningTrades++
+						analysis.AvgWin += outcome.PnL
+					} else if outcome.PnL < 0 {
+						analysis.LosingTrades++
+						analysis.AvgLoss += outcome.PnL
+					}
+					if _, ok := analysis.SymbolStats[k.sym]; !ok {
+						analysis.SymbolStats[k.sym] = &logger.SymbolPerformance{Symbol: k.sym}
+					}
+					st := analysis.SymbolStats[k.sym]
+					st.TotalTrades++
+					st.TotalPnL += outcome.PnL
+					if outcome.PnL > 0 {
+						st.WinningTrades++
+					} else if outcome.PnL < 0 {
+						st.LosingTrades++
+					}
 
-                    // 重置状态，继续下一周期
-                    qty, entryNotional, entryQty, openTime, realized, feeUSDT = 0, 0, 0, time.Time{}, 0, 0
-                }
-            }
-        }
-        // 统计指标
-        if analysis.TotalTrades > 0 {
-            analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
-            totalWin := analysis.AvgWin
-            totalLoss := analysis.AvgLoss
-            if analysis.WinningTrades > 0 { analysis.AvgWin /= float64(analysis.WinningTrades) }
-            if analysis.LosingTrades > 0 { analysis.AvgLoss /= float64(analysis.LosingTrades) }
-            if totalLoss != 0 { analysis.ProfitFactor = totalWin / (-totalLoss) } else if totalWin > 0 { analysis.ProfitFactor = 999.0 }
-        }
-        best := -1e12; worst := 1e12
-        for sym, st := range analysis.SymbolStats { if st.TotalTrades > 0 { st.WinRate = (float64(st.WinningTrades)/float64(st.TotalTrades))*100; st.AvgPnL = st.TotalPnL/float64(st.TotalTrades); if st.TotalPnL > best { best = st.TotalPnL; analysis.BestSymbol = sym }; if st.TotalPnL < worst { worst = st.TotalPnL; analysis.WorstSymbol = sym } } }
-        // 倒序保留最近10个
-        if n := len(analysis.RecentTrades); n > 1 { for i, j := 0, n-1; i<j; i,j=i+1,j-1 { analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i] } }
-        if len(analysis.RecentTrades) > 10 { analysis.RecentTrades = analysis.RecentTrades[:10] }
-        // 夏普比率回退到日志净值序列计算
-        analysis.SharpeRatio = trader.GetDecisionLogger().CalculateSharpeForWindow(records)
-        return analysis, nil
-    }()
+					// 重置状态，继续下一周期
+					qty, entryNotional, entryQty, openTime, realized, feeUSDT = 0, 0, 0, time.Time{}, 0, 0
+				}
+			}
+		}
+		// 统计指标
+		if analysis.TotalTrades > 0 {
+			analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
+			totalWin := analysis.AvgWin
+			totalLoss := analysis.AvgLoss
+			if analysis.WinningTrades > 0 {
+				analysis.AvgWin /= float64(analysis.WinningTrades)
+			}
+			if analysis.LosingTrades > 0 {
+				analysis.AvgLoss /= float64(analysis.LosingTrades)
+			}
+			if totalLoss != 0 {
+				analysis.ProfitFactor = totalWin / (-totalLoss)
+			} else if totalWin > 0 {
+				analysis.ProfitFactor = 999.0
+			}
+		}
+		best := -1e12
+		worst := 1e12
+		for sym, st := range analysis.SymbolStats {
+			if st.TotalTrades > 0 {
+				st.WinRate = (float64(st.WinningTrades) / float64(st.TotalTrades)) * 100
+				st.AvgPnL = st.TotalPnL / float64(st.TotalTrades)
+				if st.TotalPnL > best {
+					best = st.TotalPnL
+					analysis.BestSymbol = sym
+				}
+				if st.TotalPnL < worst {
+					worst = st.TotalPnL
+					analysis.WorstSymbol = sym
+				}
+			}
+		}
+		// 倒序保留最近10个
+		if n := len(analysis.RecentTrades); n > 1 {
+			for i, j := 0, n-1; i < j; i, j = i+1, j-1 {
+				analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
+			}
+		}
+		if len(analysis.RecentTrades) > 10 {
+			analysis.RecentTrades = analysis.RecentTrades[:10]
+		}
+		// 夏普比率回退到日志净值序列计算
+		analysis.SharpeRatio = trader.GetDecisionLogger().CalculateSharpeForWindow(records)
+		return analysis, nil
+	}()
 
-    if exErr == nil && exchangeAnalysis != nil && exchangeAnalysis.TotalTrades > 0 {
-        c.JSON(http.StatusOK, exchangeAnalysis)
-        return
-    }
+	if exErr == nil && exchangeAnalysis != nil && exchangeAnalysis.TotalTrades > 0 {
+		c.JSON(http.StatusOK, exchangeAnalysis)
+		return
+	}
 
-    // 回退：基于日志的分析（带费率解析器）
-    performance, err := trader.GetDecisionLogger().AnalyzePerformanceWithFee(lookback, resolver)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{
-            "error": fmt.Sprintf("分析历史表现失败: %v", err),
-        })
-        return
-    }
+	// 回退：基于日志的分析（带费率解析器）
+	performance, err := trader.GetDecisionLogger().AnalyzePerformanceWithFee(lookback, resolver)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("分析历史表现失败: %v", err),
+		})
+		return
+	}
 
-    c.JSON(http.StatusOK, performance)
+	c.JSON(http.StatusOK, performance)
 }
 
 // authMiddleware JWT认证中间件
@@ -2461,70 +2530,70 @@ func (s *Server) handleGetAnomalyConfig(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
-		"mode":           anomalyConfig.Mode,
-		"sensitivity":    anomalyConfig.Sensitivity,
-		"use_llm":        anomalyConfig.UseLLM,
-		"gambit_enabled": anomalyConfig.GambitEnabled,
-		"is_enabled":     anomalyConfig.IsEnabled(),
+		"mode":            anomalyConfig.Mode,
+		"sensitivity":     anomalyConfig.Sensitivity,
+		"use_llm":         anomalyConfig.UseLLM,
+		"gambit_enabled":  anomalyConfig.GambitEnabled,
+		"is_enabled":      anomalyConfig.IsEnabled(),
 		"can_take_action": anomalyConfig.ShouldTakeAction(),
-		"gambit_config":  anomalyConfig.GetGambitConfig(),
+		"gambit_config":   anomalyConfig.GetGambitConfig(),
 	})
 }
 
 // handleUpdateAnomalyConfig 更新异常监控配置
 func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
-    var req struct {
-        Mode                string   `json:"mode"`
-        Sensitivity         string   `json:"sensitivity"`
-        UseLLM              *bool    `json:"use_llm"`
-        GambitEnabled       *bool    `json:"gambit_enabled"`
-        // 可选高级项
-        GambitMaxPosition   *float64 `json:"gambit_max_position"`   // 0-1
-        GambitMaxAmount     *float64 `json:"gambit_max_amount"`     // USDT
-        GambitMinAmount     *float64 `json:"gambit_min_amount"`     // USDT
-        GambitMinConfidence *float64 `json:"gambit_min_confidence"` // 0-1
-        GambitMaxStopLoss   *float64 `json:"gambit_max_stop_loss"`  // 0-1
-        GambitCoolingMin    *int     `json:"gambit_cooling_minutes"`
-    }
-	
+	var req struct {
+		Mode          string `json:"mode"`
+		Sensitivity   string `json:"sensitivity"`
+		UseLLM        *bool  `json:"use_llm"`
+		GambitEnabled *bool  `json:"gambit_enabled"`
+		// 可选高级项
+		GambitMaxPosition   *float64 `json:"gambit_max_position"`   // 0-1
+		GambitMaxAmount     *float64 `json:"gambit_max_amount"`     // USDT
+		GambitMinAmount     *float64 `json:"gambit_min_amount"`     // USDT
+		GambitMinConfidence *float64 `json:"gambit_min_confidence"` // 0-1
+		GambitMaxStopLoss   *float64 `json:"gambit_max_stop_loss"`  // 0-1
+		GambitCoolingMin    *int     `json:"gambit_cooling_minutes"`
+	}
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
 		return
 	}
-	
+
 	validModes := map[string]bool{
 		"off": true, "watch": true, "guard": true, "balanced": true, "aggressive": true,
 	}
 	validSensitivities := map[string]bool{
 		"low": true, "medium": true, "high": true,
 	}
-	
+
 	if req.Mode != "" && !validModes[req.Mode] {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的模式"})
 		return
 	}
-	
+
 	if req.Sensitivity != "" && !validSensitivities[req.Sensitivity] {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的灵敏度"})
 		return
 	}
-	
-    if req.Mode != "" {
-        if err := s.database.SetSystemConfig("anomaly_mode", req.Mode); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新模式失败"})
-            return
-        }
-    }
-	
+
+	if req.Mode != "" {
+		if err := s.database.SetSystemConfig("anomaly_mode", req.Mode); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新模式失败"})
+			return
+		}
+	}
+
 	if req.Sensitivity != "" {
 		if err := s.database.SetSystemConfig("anomaly_sensitivity", req.Sensitivity); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新灵敏度失败"})
 			return
 		}
 	}
-	
+
 	if req.UseLLM != nil {
 		value := "false"
 		if *req.UseLLM {
@@ -2535,111 +2604,111 @@ func (s *Server) handleUpdateAnomalyConfig(c *gin.Context) {
 			return
 		}
 	}
-	
-    if req.GambitEnabled != nil {
-        value := "false"
-        if *req.GambitEnabled {
-            value = "true"
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_enabled", value); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新搏一搏配置失败"})
-            return
-        }
-    }
 
-    // 高级项：校验并保存
-    if req.GambitMaxPosition != nil {
-        if *req.GambitMaxPosition <= 0 || *req.GambitMaxPosition > 1 {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_position 必须在(0,1]"})
-            return
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_max_position", fmt.Sprintf("%g", *req.GambitMaxPosition)); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_position 失败"})
-            return
-        }
-    }
-    if req.GambitMaxAmount != nil {
-        if *req.GambitMaxAmount <= 0 {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_amount 必须>0"})
-            return
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_max_amount", fmt.Sprintf("%g", *req.GambitMaxAmount)); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_amount 失败"})
-            return
-        }
-    }
-    if req.GambitMinAmount != nil {
-        if *req.GambitMinAmount <= 0 {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_amount 必须>0"})
-            return
-        }
-        // 若同时设置了 max，检查 min<=max；否则读取当前 max 检查
-        var currentMax float64 = 0
-        if req.GambitMaxAmount != nil {
-            currentMax = *req.GambitMaxAmount
-        } else {
-            if v, err := s.database.GetSystemConfig("anomaly_gambit_max_amount"); err == nil {
-                fmt.Sscanf(v, "%f", &currentMax)
-            }
-        }
-        if currentMax > 0 && *req.GambitMinAmount > currentMax {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_amount 不能大于 gambit_max_amount"})
-            return
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_min_amount", fmt.Sprintf("%g", *req.GambitMinAmount)); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_min_amount 失败"})
-            return
-        }
-    }
-    if req.GambitMinConfidence != nil {
-        if *req.GambitMinConfidence < 0 || *req.GambitMinConfidence > 1 {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_confidence 必须在[0,1]"})
-            return
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_min_confidence", fmt.Sprintf("%g", *req.GambitMinConfidence)); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_min_confidence 失败"})
-            return
-        }
-    }
-    if req.GambitMaxStopLoss != nil {
-        if *req.GambitMaxStopLoss <= 0 || *req.GambitMaxStopLoss > 0.2 {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_stop_loss 建议在(0,0.2]之间（0-20%）"})
-            return
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_max_stop_loss", fmt.Sprintf("%g", *req.GambitMaxStopLoss)); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_stop_loss 失败"})
-            return
-        }
-    }
-    if req.GambitCoolingMin != nil {
-        if *req.GambitCoolingMin < 0 || *req.GambitCoolingMin > 360 {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_cooling_minutes 范围无效(0-360)"})
-            return
-        }
-        if err := s.database.SetSystemConfig("anomaly_gambit_cooling_minutes", fmt.Sprintf("%d", *req.GambitCoolingMin)); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_cooling_minutes 失败"})
-            return
-        }
-    }
-	
+	if req.GambitEnabled != nil {
+		value := "false"
+		if *req.GambitEnabled {
+			value = "true"
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_enabled", value); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新搏一搏配置失败"})
+			return
+		}
+	}
+
+	// 高级项：校验并保存
+	if req.GambitMaxPosition != nil {
+		if *req.GambitMaxPosition <= 0 || *req.GambitMaxPosition > 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_position 必须在(0,1]"})
+			return
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_max_position", fmt.Sprintf("%g", *req.GambitMaxPosition)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_position 失败"})
+			return
+		}
+	}
+	if req.GambitMaxAmount != nil {
+		if *req.GambitMaxAmount <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_amount 必须>0"})
+			return
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_max_amount", fmt.Sprintf("%g", *req.GambitMaxAmount)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_amount 失败"})
+			return
+		}
+	}
+	if req.GambitMinAmount != nil {
+		if *req.GambitMinAmount <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_amount 必须>0"})
+			return
+		}
+		// 若同时设置了 max，检查 min<=max；否则读取当前 max 检查
+		var currentMax float64 = 0
+		if req.GambitMaxAmount != nil {
+			currentMax = *req.GambitMaxAmount
+		} else {
+			if v, err := s.database.GetSystemConfig("anomaly_gambit_max_amount"); err == nil {
+				fmt.Sscanf(v, "%f", &currentMax)
+			}
+		}
+		if currentMax > 0 && *req.GambitMinAmount > currentMax {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_amount 不能大于 gambit_max_amount"})
+			return
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_min_amount", fmt.Sprintf("%g", *req.GambitMinAmount)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_min_amount 失败"})
+			return
+		}
+	}
+	if req.GambitMinConfidence != nil {
+		if *req.GambitMinConfidence < 0 || *req.GambitMinConfidence > 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_min_confidence 必须在[0,1]"})
+			return
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_min_confidence", fmt.Sprintf("%g", *req.GambitMinConfidence)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_min_confidence 失败"})
+			return
+		}
+	}
+	if req.GambitMaxStopLoss != nil {
+		if *req.GambitMaxStopLoss <= 0 || *req.GambitMaxStopLoss > 0.2 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_max_stop_loss 建议在(0,0.2]之间（0-20%）"})
+			return
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_max_stop_loss", fmt.Sprintf("%g", *req.GambitMaxStopLoss)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_max_stop_loss 失败"})
+			return
+		}
+	}
+	if req.GambitCoolingMin != nil {
+		if *req.GambitCoolingMin < 0 || *req.GambitCoolingMin > 360 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "gambit_cooling_minutes 范围无效(0-360)"})
+			return
+		}
+		if err := s.database.SetSystemConfig("anomaly_gambit_cooling_minutes", fmt.Sprintf("%d", *req.GambitCoolingMin)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新 gambit_cooling_minutes 失败"})
+			return
+		}
+	}
+
 	anomalyConfig, err := config.LoadAnomalyConfig(s.database)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "重新加载配置失败"})
 		return
 	}
-	
+
 	log.Printf("✅ 异常监控配置已更新：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
-	
-    c.JSON(http.StatusOK, gin.H{
-        "message": "配置更新成功",
-        "config": gin.H{
-            "mode":           anomalyConfig.Mode,
-            "sensitivity":    anomalyConfig.Sensitivity,
-            "use_llm":        anomalyConfig.UseLLM,
-            "gambit_enabled": anomalyConfig.GambitEnabled,
-            "gambit_config":  anomalyConfig.GetGambitConfig(),
-        },
-    })
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "配置更新成功",
+		"config": gin.H{
+			"mode":           anomalyConfig.Mode,
+			"sensitivity":    anomalyConfig.Sensitivity,
+			"use_llm":        anomalyConfig.UseLLM,
+			"gambit_enabled": anomalyConfig.GambitEnabled,
+			"gambit_config":  anomalyConfig.GetGambitConfig(),
+		},
+	})
 }
 
 // handleGetAnomalyStatus 获取异常监控状态
@@ -2651,7 +2720,7 @@ func (s *Server) handleGetAnomalyStatus(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	descriptions := map[string]string{
 		"off":        "异常监控已关闭",
 		"watch":      "观察模式：只提醒不操作",
@@ -2659,41 +2728,46 @@ func (s *Server) handleGetAnomalyStatus(c *gin.Context) {
 		"balanced":   "平衡模式：可追涨杀跌，小仓位试探",
 		"aggressive": "激进模式：快速响应，加大仓位",
 	}
-	
+
 	description := descriptions[string(anomalyConfig.Mode)]
 	if description == "" {
 		description = "未知模式"
 	}
-	
-    // 监控币种数量（若 WSMonitor 可用）
-    monitored := 0
-    if market.WSMonitorCli != nil {
-        monitored = market.WSMonitorCli.GetMonitoredCount()
-    }
 
-    c.JSON(http.StatusOK, gin.H{
-        "enabled":            anomalyConfig.IsEnabled(),
-        "mode":               anomalyConfig.Mode,
-        "sensitivity":        anomalyConfig.Sensitivity,
-        "use_llm":            anomalyConfig.UseLLM,
-        "gambit_enabled":     anomalyConfig.GambitEnabled,
-        "description":        description,
-        "monitored_symbols":  monitored,
-        })
+	// 监控币种数量（若 WSMonitor 可用）
+	monitored := 0
+	if market.WSMonitorCli != nil {
+		monitored = market.WSMonitorCli.GetMonitoredCount()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":           anomalyConfig.IsEnabled(),
+		"mode":              anomalyConfig.Mode,
+		"sensitivity":       anomalyConfig.Sensitivity,
+		"use_llm":           anomalyConfig.UseLLM,
+		"gambit_enabled":    anomalyConfig.GambitEnabled,
+		"description":       description,
+		"monitored_symbols": monitored,
+	})
 }
+
 // handleGetNews 返回缓存的新闻
 func (s *Server) handleGetNews(c *gin.Context) {
-    symbol := c.Query("symbol")
-    if symbol == "" {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "symbol required"})
-        return
-    }
-    limit := 5
-    if v := c.Query("limit"); v != "" { if n,err := strconv.Atoi(v); err==nil && n>0 { limit = n } }
-    items, err := news.Latest(market.Normalize(symbol), limit)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
-    c.JSON(http.StatusOK, items)
+	symbol := c.Query("symbol")
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol required"})
+		return
+	}
+	limit := 5
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	items, err := news.Latest(market.Normalize(symbol), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, items)
 }
