@@ -10,6 +10,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"nofx/news"
 	"strings"
 	"sync"
 	"time"
@@ -73,8 +74,11 @@ type AutoTraderConfig struct {
 	DefaultCoins []string // 默认币种列表（从数据库获取）
 	TradingCoins []string // 实际交易币种列表
 
-	// 系统提示词模板
-	SystemPromptTemplate string // 系统提示词模板名称（如 "default", "aggressive"）
+    // 系统提示词模板
+    SystemPromptTemplate string // 系统提示词模板名称（如 "default", "aggressive"）
+
+    // 是否在决策上下文中包含新闻
+    IncludeNews bool
 }
 
 // AutoTrader 自动交易器
@@ -709,6 +713,38 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Performance:    performance, // 添加历史表现分析
 	}
 
+	// 可选：注入新闻（控制 token 体积）
+	if at.GetIncludeNews() {
+		// 选取待注入的符号：优先当前持仓前2个，其次候选前1个
+		symSet := make(map[string]bool)
+		var pick []string
+		for _, p := range positionInfos {
+			if len(pick) >= 2 { break }
+			if !symSet[p.Symbol] {
+				pick = append(pick, p.Symbol)
+				symSet[p.Symbol] = true
+			}
+		}
+		if len(pick) == 0 && len(candidateCoins) > 0 {
+			pick = append(pick, candidateCoins[0].Symbol)
+		}
+		var briefs []decision.NewsBrief
+		for _, s := range pick {
+			items, _ := news.Latest(s, 3)
+			for _, it := range items {
+				briefs = append(briefs, decision.NewsBrief{
+					Symbol:      s,
+					Title:       it.Title,
+					Source:      it.Source,
+					URL:         it.URL,
+					PublishedAt: it.PublishedAt.Format("2006-01-02 15:04:05"),
+					Summary:     it.Summary,
+				})
+			}
+		}
+		ctx.News = briefs
+	}
+
 	return ctx, nil
 }
 
@@ -1230,8 +1266,11 @@ func (at *AutoTrader) GetSystemPromptTemplate() string {
 
 // GetDecisionLogger 获取决策日志记录器
 func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
-	return at.decisionLogger
+    return at.decisionLogger
 }
+
+// GetIncludeNews 是否在决策上下文中包含新闻
+func (at *AutoTrader) GetIncludeNews() bool { return at.config.IncludeNews }
 
 // LogAnomalyAction 记录异常监控触发的紧急操作到决策日志（用于前端“最近决策”展示）
 func (at *AutoTrader) LogAnomalyAction(symbol, action string, price float64, extra map[string]interface{}) {

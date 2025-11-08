@@ -1,24 +1,24 @@
 package config
 
 import (
-	"crypto/rand"
-	"database/sql"
-	"encoding/base32"
-	"encoding/json"
-	"fmt"
-	"log"
-	"nofx/market"
-	"os"
-	"slices"
-	"strings"
-	"time"
+    "crypto/rand"
+    "database/sql"
+    "encoding/base32"
+    "encoding/json"
+    "fmt"
+    "log"
+    "nofx/market"
+    "os"
+    "slices"
+    "strings"
+    "time"
 
 	_ "modernc.org/sqlite"
 )
 
 // Database 配置数据库
 type Database struct {
-	db *sql.DB
+    db *sql.DB
 }
 
 // NewDatabase 创建配置数据库
@@ -138,6 +138,20 @@ func (d *Database) createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 
+		// 新闻缓存表（每个symbol保留最近若干条）
+		`CREATE TABLE IF NOT EXISTS news_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol TEXT NOT NULL,
+			title TEXT NOT NULL,
+			url TEXT NOT NULL,
+			source TEXT DEFAULT '',
+			published_at DATETIME NULL,
+			summary TEXT DEFAULT '',
+			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(symbol, url)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_news_symbol_fetched ON news_items(symbol, fetched_at DESC)`,
+
 		// 触发器：自动更新 updated_at
 		`CREATE TRIGGER IF NOT EXISTS update_users_updated_at
 			AFTER UPDATE ON users
@@ -199,6 +213,7 @@ func (d *Database) createTables() error {
 		`ALTER TABLE traders ADD COLUMN use_coin_pool BOOLEAN DEFAULT 0`,               // 是否使用COIN POOL信号源
 		`ALTER TABLE traders ADD COLUMN use_oi_top BOOLEAN DEFAULT 0`,                  // 是否使用OI TOP信号源
 		`ALTER TABLE traders ADD COLUMN system_prompt_template TEXT DEFAULT 'default'`, // 系统提示词模板名称
+		`ALTER TABLE traders ADD COLUMN include_news BOOLEAN DEFAULT 0`,                // 是否在决策中包含新闻
 		`ALTER TABLE ai_models ADD COLUMN custom_api_url TEXT DEFAULT ''`,              // 自定义API地址
 		`ALTER TABLE ai_models ADD COLUMN custom_model_name TEXT DEFAULT ''`,           // 自定义模型名称
 	}
@@ -283,6 +298,10 @@ func (d *Database) initDefaultData() error {
 		"anomaly_gambit_min_confidence": "0.8",   // 搏一搏最小置信度（80%）
 		"anomaly_gambit_max_stop_loss":  "0.03",  // 搏一搏最大止损（3%）
 		"anomaly_gambit_cooling_minutes": "60",    // 搏一搏冷却期（60分钟）
+
+		// 新闻抓取配置
+		"news_interval_minutes": "15",
+		"news_max_items":        "3",
 	}
 
 	for key, value := range systemConfigs {
@@ -297,6 +316,36 @@ func (d *Database) initDefaultData() error {
 
 	return nil
 }
+
+// ---- News helpers ----
+
+// InsertNews upserts one news row (symbol,url unique)
+func (d *Database) InsertNews(symbol, title, url, source string, publishedAt time.Time, summary string, fetchedAt time.Time) error {
+    // publishedAt may be zero; store NULL in that case
+    var pub interface{}
+    if !publishedAt.IsZero() { pub = publishedAt }
+    _, err := d.db.Exec(`
+        INSERT OR REPLACE INTO news_items (symbol,title,url,source,published_at,summary,fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+    `, symbol, title, url, source, pub, summary, fetchedAt)
+    return err
+}
+
+// TrimNews keeps only latest 'keep' rows for symbol
+func (d *Database) TrimNews(symbol string, keep int) error {
+    if keep <= 0 { keep = 5 }
+    _, err := d.db.Exec(`
+        DELETE FROM news_items WHERE symbol = ? AND id NOT IN (
+            SELECT id FROM news_items WHERE symbol = ? ORDER BY
+                COALESCE(published_at, fetched_at) DESC, id DESC LIMIT ?
+        )
+    `, symbol, symbol, keep)
+    return err
+}
+
+// Query is a thin wrapper that exposes SELECT access without leaking the raw *sql.DB.
+// Callers must Close the returned rows.
+func (d *Database) Query(query string, args ...any) (*sql.Rows, error) { return d.db.Query(query, args...) }
 
 // migrateExchangesTable 迁移exchanges表支持多用户
 func (d *Database) migrateExchangesTable() error {
@@ -442,10 +491,11 @@ type TraderRecord struct {
 	UseOITop             bool      `json:"use_oi_top"`             // 是否使用OI TOP信号源
 	CustomPrompt         string    `json:"custom_prompt"`          // 自定义交易策略prompt
 	OverrideBasePrompt   bool      `json:"override_base_prompt"`   // 是否覆盖基础prompt
-	SystemPromptTemplate string    `json:"system_prompt_template"` // 系统提示词模板名称
-	IsCrossMargin        bool      `json:"is_cross_margin"`        // 是否为全仓模式（true=全仓，false=逐仓）
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+    SystemPromptTemplate string    `json:"system_prompt_template"` // 系统提示词模板名称
+    IsCrossMargin        bool      `json:"is_cross_margin"`        // 是否为全仓模式（true=全仓，false=逐仓）
+    IncludeNews          bool      `json:"include_news"`           // 是否在决策中包含新闻
+    CreatedAt            time.Time `json:"created_at"`
+    UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // UserSignalSource 用户信号源配置
@@ -804,11 +854,11 @@ func (d *Database) CreateExchange(userID, id, name, typ string, enabled bool, ap
 
 // CreateTrader 创建交易员
 func (d *Database) CreateTrader(trader *TraderRecord) error {
-	_, err := d.db.Exec(`
-		INSERT INTO traders (id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running, btc_eth_leverage, altcoin_leverage, trading_symbols, use_coin_pool, use_oi_top, custom_prompt, override_base_prompt, system_prompt_template, is_cross_margin)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance, trader.ScanIntervalMinutes, trader.IsRunning, trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, trader.UseCoinPool, trader.UseOITop, trader.CustomPrompt, trader.OverrideBasePrompt, trader.SystemPromptTemplate, trader.IsCrossMargin)
-	return err
+    _, err := d.db.Exec(`
+		INSERT INTO traders (id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running, btc_eth_leverage, altcoin_leverage, trading_symbols, use_coin_pool, use_oi_top, custom_prompt, override_base_prompt, system_prompt_template, is_cross_margin, include_news)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance, trader.ScanIntervalMinutes, trader.IsRunning, trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, trader.UseCoinPool, trader.UseOITop, trader.CustomPrompt, trader.OverrideBasePrompt, trader.SystemPromptTemplate, trader.IsCrossMargin, trader.IncludeNews)
+    return err
 }
 
 // GetTraders 获取用户的交易员
@@ -820,7 +870,9 @@ func (d *Database) GetTraders(userID string) ([]*TraderRecord, error) {
 		       COALESCE(use_coin_pool, 0) as use_coin_pool, COALESCE(use_oi_top, 0) as use_oi_top,
 		       COALESCE(custom_prompt, '') as custom_prompt, COALESCE(override_base_prompt, 0) as override_base_prompt,
 		       COALESCE(system_prompt_template, 'default') as system_prompt_template,
-		       COALESCE(is_cross_margin, 1) as is_cross_margin, created_at, updated_at
+		       COALESCE(is_cross_margin, 1) as is_cross_margin,
+		       COALESCE(include_news, 0) as include_news,
+		       created_at, updated_at
 		FROM traders WHERE user_id = ? ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
@@ -837,7 +889,7 @@ func (d *Database) GetTraders(userID string) ([]*TraderRecord, error) {
 			&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
 			&trader.UseCoinPool, &trader.UseOITop,
 			&trader.CustomPrompt, &trader.OverrideBasePrompt, &trader.SystemPromptTemplate,
-			&trader.IsCrossMargin,
+			&trader.IsCrossMargin, &trader.IncludeNews,
 			&trader.CreatedAt, &trader.UpdatedAt,
 		)
 		if err != nil {
@@ -857,18 +909,20 @@ func (d *Database) UpdateTraderStatus(userID, id string, isRunning bool) error {
 
 // UpdateTrader 更新交易员配置
 func (d *Database) UpdateTrader(trader *TraderRecord) error {
-	_, err := d.db.Exec(`
-		UPDATE traders SET
-			name = ?, ai_model_id = ?, exchange_id = ?, initial_balance = ?,
-			scan_interval_minutes = ?, btc_eth_leverage = ?, altcoin_leverage = ?,
-			trading_symbols = ?, custom_prompt = ?, override_base_prompt = ?,
-			system_prompt_template = ?, is_cross_margin = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND user_id = ?
-	`, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance,
-		trader.ScanIntervalMinutes, trader.BTCETHLeverage, trader.AltcoinLeverage,
-		trader.TradingSymbols, trader.CustomPrompt, trader.OverrideBasePrompt,
-		trader.SystemPromptTemplate, trader.IsCrossMargin, trader.ID, trader.UserID)
-	return err
+    _, err := d.db.Exec(`
+        UPDATE traders SET
+            name = ?, ai_model_id = ?, exchange_id = ?, initial_balance = ?,
+            scan_interval_minutes = ?, btc_eth_leverage = ?, altcoin_leverage = ?,
+            trading_symbols = ?, custom_prompt = ?, override_base_prompt = ?,
+            system_prompt_template = ?, is_cross_margin = ?, include_news = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    `, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance,
+        trader.ScanIntervalMinutes, trader.BTCETHLeverage, trader.AltcoinLeverage,
+        trader.TradingSymbols, trader.CustomPrompt, trader.OverrideBasePrompt,
+        trader.SystemPromptTemplate, trader.IsCrossMargin, trader.IncludeNews,
+        trader.ID, trader.UserID)
+    return err
 }
 
 // UpdateTraderCustomPrompt 更新交易员自定义Prompt
@@ -895,49 +949,50 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 	var aiModel AIModelConfig
 	var exchange ExchangeConfig
 
-	err := d.db.QueryRow(`
-		SELECT
-			t.id, t.user_id, t.name, t.ai_model_id, t.exchange_id, t.initial_balance, t.scan_interval_minutes, t.is_running,
-			COALESCE(t.btc_eth_leverage, 5) as btc_eth_leverage,
-			COALESCE(t.altcoin_leverage, 5) as altcoin_leverage,
-			COALESCE(t.trading_symbols, '') as trading_symbols,
-			COALESCE(t.use_coin_pool, 0) as use_coin_pool,
-			COALESCE(t.use_oi_top, 0) as use_oi_top,
-			COALESCE(t.custom_prompt, '') as custom_prompt,
-			COALESCE(t.override_base_prompt, 0) as override_base_prompt,
-			COALESCE(t.system_prompt_template, 'default') as system_prompt_template,
-			COALESCE(t.is_cross_margin, 1) as is_cross_margin,
-			t.created_at, t.updated_at,
-			a.id, a.user_id, a.name, a.provider, a.enabled, a.api_key,
-			COALESCE(a.custom_api_url, '') as custom_api_url,
-			COALESCE(a.custom_model_name, '') as custom_model_name,
-			a.created_at, a.updated_at,
-			e.id, e.user_id, e.name, e.type, e.enabled, e.api_key, e.secret_key, e.testnet,
-			COALESCE(e.hyperliquid_wallet_addr, '') as hyperliquid_wallet_addr,
-			COALESCE(e.aster_user, '') as aster_user,
-			COALESCE(e.aster_signer, '') as aster_signer,
-			COALESCE(e.aster_private_key, '') as aster_private_key,
-			e.created_at, e.updated_at
-		FROM traders t
-		JOIN ai_models a ON t.ai_model_id = a.id AND t.user_id = a.user_id
-		JOIN exchanges e ON t.exchange_id = e.id AND t.user_id = e.user_id
-		WHERE t.id = ? AND t.user_id = ?
-	`, traderID, userID).Scan(
-		&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
-		&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
-		&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
-		&trader.UseCoinPool, &trader.UseOITop,
-		&trader.CustomPrompt, &trader.OverrideBasePrompt, &trader.SystemPromptTemplate,
-		&trader.IsCrossMargin,
-		&trader.CreatedAt, &trader.UpdatedAt,
-		&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
-		&aiModel.CustomAPIURL, &aiModel.CustomModelName,
-		&aiModel.CreatedAt, &aiModel.UpdatedAt,
-		&exchange.ID, &exchange.UserID, &exchange.Name, &exchange.Type, &exchange.Enabled,
-		&exchange.APIKey, &exchange.SecretKey, &exchange.Testnet,
-		&exchange.HyperliquidWalletAddr, &exchange.AsterUser, &exchange.AsterSigner, &exchange.AsterPrivateKey,
-		&exchange.CreatedAt, &exchange.UpdatedAt,
-	)
+        err := d.db.QueryRow(`
+            SELECT
+                t.id, t.user_id, t.name, t.ai_model_id, t.exchange_id, t.initial_balance, t.scan_interval_minutes, t.is_running,
+                COALESCE(t.btc_eth_leverage, 5) as btc_eth_leverage,
+                COALESCE(t.altcoin_leverage, 5) as altcoin_leverage,
+                COALESCE(t.trading_symbols, '') as trading_symbols,
+                COALESCE(t.use_coin_pool, 0) as use_coin_pool,
+                COALESCE(t.use_oi_top, 0) as use_oi_top,
+                COALESCE(t.custom_prompt, '') as custom_prompt,
+                COALESCE(t.override_base_prompt, 0) as override_base_prompt,
+                COALESCE(t.system_prompt_template, 'default') as system_prompt_template,
+                COALESCE(t.is_cross_margin, 1) as is_cross_margin,
+                COALESCE(t.include_news, 0) as include_news,
+                t.created_at, t.updated_at,
+                a.id, a.user_id, a.name, a.provider, a.enabled, a.api_key,
+                COALESCE(a.custom_api_url, '') as custom_api_url,
+                COALESCE(a.custom_model_name, '') as custom_model_name,
+                a.created_at, a.updated_at,
+                e.id, e.user_id, e.name, e.type, e.enabled, e.api_key, e.secret_key, e.testnet,
+                COALESCE(e.hyperliquid_wallet_addr, '') as hyperliquid_wallet_addr,
+                COALESCE(e.aster_user, '') as aster_user,
+                COALESCE(e.aster_signer, '') as aster_signer,
+                COALESCE(e.aster_private_key, '') as aster_private_key,
+                e.created_at, e.updated_at
+            FROM traders t
+            JOIN ai_models a ON t.ai_model_id = a.id AND t.user_id = a.user_id
+            JOIN exchanges e ON t.exchange_id = e.id AND t.user_id = e.user_id
+            WHERE t.id = ? AND t.user_id = ?
+        `, traderID, userID).Scan(
+            &trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
+            &trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
+            &trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
+            &trader.UseCoinPool, &trader.UseOITop,
+            &trader.CustomPrompt, &trader.OverrideBasePrompt, &trader.SystemPromptTemplate,
+            &trader.IsCrossMargin, &trader.IncludeNews,
+            &trader.CreatedAt, &trader.UpdatedAt,
+            &aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
+            &aiModel.CustomAPIURL, &aiModel.CustomModelName,
+            &aiModel.CreatedAt, &aiModel.UpdatedAt,
+            &exchange.ID, &exchange.UserID, &exchange.Name, &exchange.Type, &exchange.Enabled,
+            &exchange.APIKey, &exchange.SecretKey, &exchange.Testnet,
+            &exchange.HyperliquidWalletAddr, &exchange.AsterUser, &exchange.AsterSigner, &exchange.AsterPrivateKey,
+            &exchange.CreatedAt, &exchange.UpdatedAt,
+        )
 
 	if err != nil {
 		return nil, nil, nil, err

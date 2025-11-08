@@ -61,7 +61,7 @@ func (a *AnomalyEvaluatorAdapter) Evaluate(
 
 // convertContextMapToContext 将 map 格式的上下文转换为 decision.Context
 func (a *AnomalyEvaluatorAdapter) convertContextMapToContext(ctxMap map[string]interface{}) (*Context, error) {
-	ctx := &Context{}
+    ctx := &Context{}
 
 	// 提取基本信息
 	if currentTime, ok := ctxMap["current_time"].(string); ok {
@@ -108,15 +108,45 @@ func (a *AnomalyEvaluatorAdapter) convertContextMapToContext(ctxMap map[string]i
 		ctx.MarketDataMap = marketDataMap
 	}
 
-	// 提取杠杆配置
-	if btcEthLeverage, ok := ctxMap["btc_eth_leverage"].(int); ok {
-		ctx.BTCETHLeverage = btcEthLeverage
-	}
-	if altcoinLeverage, ok := ctxMap["altcoin_leverage"].(int); ok {
-		ctx.AltcoinLeverage = altcoinLeverage
-	}
+    // 提取杠杆配置
+    if btcEthLeverage, ok := ctxMap["btc_eth_leverage"].(int); ok {
+        ctx.BTCETHLeverage = btcEthLeverage
+    }
+    if altcoinLeverage, ok := ctxMap["altcoin_leverage"].(int); ok {
+        ctx.AltcoinLeverage = altcoinLeverage
+    }
 
-	return ctx, nil
+    // 提取新闻（来自 market 层以 []map[string]string 传入）
+    if rawNews, ok := ctxMap["news"]; ok && rawNews != nil {
+        ctx.News = make([]NewsBrief, 0)
+        switch list := rawNews.(type) {
+        case []map[string]string:
+            for _, it := range list {
+                ctx.News = append(ctx.News, NewsBrief{
+                    Title:       it["title"],
+                    Source:      it["source"],
+                    URL:         it["url"],
+                    PublishedAt: it["published_at"],
+                    Summary:     it["summary"],
+                })
+            }
+        case []interface{}:
+            for _, v := range list {
+                if m, ok := v.(map[string]interface{}); ok {
+                    nb := NewsBrief{}
+                    if s, ok := m["symbol"].(string); ok { nb.Symbol = s }
+                    if s, ok := m["title"].(string); ok { nb.Title = s }
+                    if s, ok := m["source"].(string); ok { nb.Source = s }
+                    if s, ok := m["url"].(string); ok { nb.URL = s }
+                    if s, ok := m["published_at"].(string); ok { nb.PublishedAt = s }
+                    if s, ok := m["summary"].(string); ok { nb.Summary = s }
+                    if nb.Title != "" { ctx.News = append(ctx.News, nb) }
+                }
+            }
+        }
+    }
+
+    return ctx, nil
 }
 
 // convertDecisionToMap 将 AnomalyDecision 转换为 map

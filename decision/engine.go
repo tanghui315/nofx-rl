@@ -77,7 +77,19 @@ type Context struct {
 	OITopDataMap    map[string]*OITopData   `json:"-"` // OI Top数据映射
 	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
-	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+    AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+    // 最新新闻（可选，控制条数，避免过长），由异常/全权路径注入
+    News            []NewsBrief             `json:"-"`
+}
+
+// NewsBrief 简要新闻条目
+type NewsBrief struct {
+    Symbol      string `json:"symbol,omitempty"`
+    Title       string `json:"title"`
+    Source      string `json:"source,omitempty"`
+    URL         string `json:"url,omitempty"`
+    PublishedAt string `json:"published_at,omitempty"`
+    Summary     string `json:"summary,omitempty"`
 }
 
 // Decision AI的交易决策
@@ -427,7 +439,28 @@ func buildUserPrompt(ctx *Context) string {
 		}
 	}
 
-	sb.WriteString("---\n\n")
+    sb.WriteString("---\n\n")
+    // 新闻速览（若有）
+    if len(ctx.News) > 0 {
+        sb.WriteString("## 🗞️ 新闻速览（最多3条/币种）\n\n")
+        shown := 0
+        for _, n := range ctx.News {
+            if shown >= 6 { break }
+            line := n.Title
+            if n.Source != "" { line += " — " + n.Source }
+            if n.PublishedAt != "" { line += " (" + n.PublishedAt + ")" }
+            if n.Symbol != "" { line = "[" + n.Symbol + "] " + line }
+            sb.WriteString("- " + line + "\n")
+            if n.Summary != "" {
+                // 简要摘要（加长至约200字)
+                summary := n.Summary
+                if len(summary) > 200 { summary = summary[:200] + "…" }
+                sb.WriteString("  ▹ " + summary + "\n")
+            }
+            shown++
+        }
+        sb.WriteString("\n")
+    }
 	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
 
 	return sb.String()

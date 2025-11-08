@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { getExchangeIcon } from './ExchangeIcons'
 import { getModelIcon } from './ModelIcons'
 import { TraderConfigModal } from './TraderConfigModal'
+import { NewsDebugPanel } from './NewsDebugPanel'
 import {
   Bot,
   Brain,
@@ -40,6 +41,14 @@ function getModelDisplayName(modelId: string): string {
   }
 }
 
+function getTemplateDisplayName(name?: string): string {
+  if (!name) return 'Default'
+  const n = name.toLowerCase()
+  if (n === 'default') return 'Default'
+  if (n === 'aggressive') return 'Aggressive'
+  return n.charAt(0).toUpperCase() + n.slice(1)
+}
+
 // 提取下划线后面的名称部分
 function getShortName(fullName: string): string {
   const parts = fullName.split('_')
@@ -61,6 +70,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const [editingModel, setEditingModel] = useState<string | null>(null)
   const [editingExchange, setEditingExchange] = useState<string | null>(null)
   const [editingTrader, setEditingTrader] = useState<any>(null)
+  const [showNewsPanel, setShowNewsPanel] = useState(false)
   const [allModels, setAllModels] = useState<AIModel[]>([])
   const [allExchanges, setAllExchanges] = useState<Exchange[]>([])
   const [supportedModels, setSupportedModels] = useState<AIModel[]>([])
@@ -273,9 +283,11 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         trading_symbols: data.trading_symbols,
         custom_prompt: data.custom_prompt,
         override_base_prompt: data.override_base_prompt,
+        system_prompt_template: data.system_prompt_template,
         is_cross_margin: data.is_cross_margin,
         use_coin_pool: data.use_coin_pool,
         use_oi_top: data.use_oi_top,
+        include_news: !!data.include_news,
       }
 
       await api.updateTrader(editingTrader.trader_id, request)
@@ -750,6 +762,18 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             <Plus className="w-4 h-4" />
             {t('createTrader', language)}
           </button>
+
+          <button
+            onClick={() => setShowNewsPanel((v) => !v)}
+            className="px-3 md:px-4 py-2 rounded text-xs md:text-sm font-semibold transition-all hover:scale-105 whitespace-nowrap"
+            style={{
+              background: '#2B3139',
+              color: '#EAECEF',
+              border: '1px solid #474D57',
+            }}
+          >
+            📰 新闻缓存
+          </button>
         </div>
       </div>
 
@@ -800,6 +824,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             </div>
           </div>
         )}
+
+      {showNewsPanel && <NewsDebugPanel />}
 
       {/* Configuration Status */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
@@ -1005,6 +1031,13 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                         trader.ai_model.split('_').pop() || trader.ai_model
                       )}{' '}
                       Model • {trader.exchange_id?.toUpperCase()}
+                      <span
+                        className="ml-2 px-2 py-0.5 rounded border text-[10px] md:text-xs"
+                        style={{ background: '#2B3139', color: '#EAECEF', borderColor: '#474D57' }}
+                        title="系统提示词模板"
+                      >
+                        Template: {getTemplateDisplayName(trader.system_prompt_template)}
+                      </span>
                     </div>
                   </div>
                 </div>

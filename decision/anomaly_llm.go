@@ -102,6 +102,26 @@ func buildAnomalyPrompt(event *market.AnomalyEvent, ctx *Context, anomalyConfig 
     sb.WriteString(fmt.Sprintf("- **ATR倍数**: %.1fx（波动率）\n", event.ATRRatio))
     sb.WriteString("\n")
 
+    // 相关新闻（如有）
+    if len(ctx.News) > 0 {
+        sb.WriteString("# 相关新闻（最近3条）\n")
+        shown := 0
+        for _, n := range ctx.News {
+            if shown >= 3 { break }
+            line := n.Title
+            if n.Source != "" { line += " — " + n.Source }
+            if n.PublishedAt != "" { line += " (" + n.PublishedAt + ")" }
+            sb.WriteString("- " + line + "\n")
+            if n.Summary != "" {
+                sum := n.Summary
+                if len(sum) > 220 { sum = sum[:220] + "…" }
+                sb.WriteString("  ▹ " + sum + "\n")
+            }
+            shown++
+        }
+        sb.WriteString("\n")
+    }
+
     // 触发币技术指标摘要（从 market_data_map 中获取更丰富的上下文）
     if ctx.MarketDataMap != nil {
         if md, ok := ctx.MarketDataMap[event.Symbol]; ok && md != nil {

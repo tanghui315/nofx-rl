@@ -1,20 +1,21 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"nofx/api"
-	"nofx/auth"
-	"nofx/config"
-	"nofx/decision"
-	"nofx/manager"
-	"nofx/market"
-	"nofx/mcp"
-	"nofx/pool"
-	"os"
-	"os/signal"
-	"strconv"
+    "encoding/json"
+    "fmt"
+    "log"
+    "nofx/api"
+    "nofx/auth"
+    "nofx/config"
+    "nofx/decision"
+    "nofx/manager"
+    "nofx/market"
+    "nofx/news"
+    "nofx/mcp"
+    "nofx/pool"
+    "os"
+    "os/signal"
+    "strconv"
 	"strings"
 	"syscall"
 
@@ -325,16 +326,19 @@ func main() {
 		}
 	}
 
-	// 创建并启动API服务器
-	apiServer := api.NewServer(traderManager, database, apiPort)
+    // 创建并启动API服务器
+    apiServer := api.NewServer(traderManager, database, apiPort)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("❌ API服务器错误: %v", err)
 		}
 	}()
 
-	// 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
-	wsMonitor := market.NewWSMonitor(150)
+    // 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
+    wsMonitor := market.NewWSMonitor(150)
+    // 启动新闻抓取后台任务（若配置了Tavily API Key）
+    news.SetDatabase(database)
+    news.StartWorker(database)
 	
 	// 加载并启用异常监控配置
 	anomalyConfig, err := config.LoadAnomalyConfig(database)

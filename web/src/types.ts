@@ -91,6 +91,7 @@ export interface TraderInfo {
   ai_model: string
   exchange_id?: string
   is_running?: boolean
+  system_prompt_template?: string
   custom_prompt?: string
   use_coin_pool?: boolean
   use_oi_top?: boolean
@@ -137,6 +138,7 @@ export interface CreateTraderRequest {
   is_cross_margin?: boolean
   use_coin_pool?: boolean
   use_oi_top?: boolean
+  include_news?: boolean
 }
 
 export interface UpdateModelConfigRequest {
@@ -200,7 +202,17 @@ export interface TraderConfigData {
   is_cross_margin: boolean
   use_coin_pool: boolean
   use_oi_top: boolean
+  include_news?: boolean
   initial_balance: number
   scan_interval_minutes: number
   is_running: boolean
+}
+
+// News items (cached in backend)
+export interface NewsItem {
+  title: string
+  url: string
+  source?: string
+  published_at?: string
+  summary?: string
 }

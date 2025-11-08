@@ -23,6 +23,7 @@ interface TraderConfigData {
   is_cross_margin: boolean
   use_coin_pool: boolean
   use_oi_top: boolean
+  include_news?: boolean
   initial_balance: number
   scan_interval_minutes: number
 }
@@ -60,6 +61,7 @@ export function TraderConfigModal({
     is_cross_margin: true,
     use_coin_pool: false,
     use_oi_top: false,
+    include_news: false,
     initial_balance: 1000,
     scan_interval_minutes: 3,
   })
@@ -96,6 +98,7 @@ export function TraderConfigModal({
         is_cross_margin: true,
         use_coin_pool: false,
         use_oi_top: false,
+        include_news: false,
         initial_balance: 1000,
         scan_interval_minutes: 3,
       })
@@ -259,6 +262,7 @@ export function TraderConfigModal({
         is_cross_margin: formData.is_cross_margin,
         use_coin_pool: formData.use_coin_pool,
         use_oi_top: formData.use_oi_top,
+        include_news: !!formData.include_news,
         initial_balance: formData.initial_balance,
         scan_interval_minutes: formData.scan_interval_minutes,
       }
@@ -683,6 +687,20 @@ export function TraderConfigModal({
                     <line x1="12" x2="12.01" y1="17" y2="17" />
                   </svg>{' '}
                   启用后将完全替换默认策略
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={!!formData.include_news}
+                  onChange={(e) =>
+                    handleInputChange('include_news', e.target.checked)
+                  }
+                  className="w-4 h-4"
+                />
+                <label className="text-sm text-[#EAECEF]">在LLM决策中包含最新新闻</label>
+                <span className="text-xs text-[#848E9C]">
+                  注入该币种最近3条新闻（需后端已配置Tavily密钥）
                 </span>
               </div>
               <div>

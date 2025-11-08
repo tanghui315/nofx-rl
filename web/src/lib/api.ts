@@ -5,6 +5,7 @@ import type {
     CreateTraderRequest,
     DecisionRecord,
     Exchange,
+    NewsItem,
     Position,
     Statistics,
     SystemStatus,
@@ -36,6 +37,16 @@ export const api = {
       headers: getAuthHeaders(),
     })
     if (!res.ok) throw new Error('获取trader列表失败')
+    return res.json()
+  },
+
+  // News (cached)
+  async getNews(symbol: string, limit = 5): Promise<NewsItem[]> {
+    const params = new URLSearchParams({ symbol, limit: String(limit) })
+    const res = await fetch(`${API_BASE}/news?${params.toString()}`, {
+      headers: getAuthHeaders(),
+    })
+    if (!res.ok) throw new Error('获取新闻缓存失败')
     return res.json()
   },
 

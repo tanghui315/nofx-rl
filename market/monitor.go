@@ -4,6 +4,7 @@ import (
     "encoding/json"
     "fmt"
     "log"
+    "nofx/news"
     "nofx/mcp"
     "reflect"
     "strings"
@@ -480,6 +481,8 @@ type AutoTraderInterface interface {
     GetStatus() map[string]interface{}
     // LogAnomalyAction 记录异常处理动作到决策日志
     LogAnomalyAction(symbol, action string, price float64, extra map[string]interface{})
+    // GetIncludeNews 是否包含新闻上下文
+    GetIncludeNews() bool
 }
 
 // TraderManagerInterface 交易员管理器接口（避免导入循环）
@@ -856,8 +859,28 @@ func (m *WSMonitor) prepareDecisionContext(symbol string, autoTrader AutoTraderI
 		"altcoin_leverage": altcoinLeverage, // 从trader配置获取
 	}
 
+    // 可选：注入新闻（仅当前评估symbol，限制条数）
+    if autoTrader.GetIncludeNews() {
+        maxItems := 3
+        newsItems, _ := news.Latest(symbol, maxItems)
+        compact := make([]map[string]string, 0, len(newsItems))
+        for _, it := range newsItems {
+            compact = append(compact, map[string]string{
+                "title": it.Title,
+                "source": it.Source,
+                "url": it.URL,
+                "published_at": it.PublishedAt.Format("2006-01-02 15:04:05"),
+                "summary": it.Summary,
+            })
+        }
+        ctx["news"] = compact
+    }
+
 	return ctx, nil
 }
+
+// configDBGet is a tiny helper to read int system config via global news DB binding
+// Note: news_max_items is fixed at 3 here to avoid extra coupling.
 
 // applyRuleBasedDecision 基于规则的决策（不使用LLM）
 func (m *WSMonitor) applyRuleBasedDecision(

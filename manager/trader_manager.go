@@ -239,6 +239,7 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		DefaultCoins:          defaultCoins,
 		TradingCoins:          tradingCoins,
 		SystemPromptTemplate:  traderCfg.SystemPromptTemplate, // 系统提示词模板
+		IncludeNews:          traderCfg.IncludeNews,
 	}
 
 	// 根据交易所类型设置API密钥
