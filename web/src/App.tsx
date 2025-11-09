@@ -806,6 +806,7 @@ function TraderDetailsPage({
                       <th className="pb-3 font-semibold text-gray-400">
                         {t('liqPrice', language)}
                       </th>
+                      <th className="pb-3 font-semibold text-gray-400">SL / TP</th>
                       <th className="pb-3 font-semibold text-gray-400">
                         {t('operation', language)}
                       </th>
@@ -889,6 +890,15 @@ function TraderDetailsPage({
                           style={{ color: '#848E9C' }}
                         >
                           {pos.liquidation_price.toFixed(4)}
+                        </td>
+                        <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>
+                          {(pos as any).stop_loss && (pos as any).stop_loss > 0
+                            ? (pos as any).stop_loss.toFixed(4)
+                            : '-'}
+                          <span className="mx-1" style={{ color: '#848E9C' }}>/</span>
+                          {(pos as any).take_profit && (pos as any).take_profit > 0
+                            ? (pos as any).take_profit.toFixed(4)
+                            : '-'}
                         </td>
                         <td className="py-3">
                           <ClosePositionButton

@@ -10,12 +10,14 @@ import (
     "sync"
     "time"
 
-	"github.com/adshao/go-binance/v2/futures"
+    "github.com/adshao/go-binance/v2/futures"
+    portfolio "github.com/adshao/go-binance/v2/portfolio"
 )
 
 // FuturesTrader 币安合约交易器
 type FuturesTrader struct {
-	client *futures.Client
+    client *futures.Client
+    pClient *portfolio.Client
 
 	// 余额缓存
 	cachedBalance     map[string]interface{}
@@ -28,20 +30,28 @@ type FuturesTrader struct {
 	positionsCacheMutex sync.RWMutex
 
 	// 缓存有效期（15秒）
-	cacheDuration time.Duration
+    cacheDuration time.Duration
+
+    // 费率缓存（symbol -> {rate, ts}）
+    feeCache      map[string]struct{ rate float64; ts time.Time }
+    feeCacheMutex sync.RWMutex
 }
 
 // NewFuturesTrader 创建合约交易器
 func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
     client := futures.NewClient(apiKey, secretKey)
+    pclient := portfolio.NewClient(apiKey, secretKey)
     // 配置 HTTP 客户端以支持代理（遵循 HTTP(S)_PROXY/NO_PROXY 环境变量）
     client.HTTPClient = &http.Client{ Transport: http.DefaultTransport, Timeout: 30 * time.Second }
+    pclient.HTTPClient = &http.Client{ Transport: http.DefaultTransport, Timeout: 30 * time.Second }
     // 同步时间，避免 Timestamp ahead 错误
     syncBinanceServerTime(client)
-	trader := &FuturesTrader{
-		client:        client,
-		cacheDuration: 15 * time.Second, // 15秒缓存
-	}
+    trader := &FuturesTrader{
+        client:        client,
+        pClient:       pclient,
+        cacheDuration: 15 * time.Second, // 15秒缓存
+        feeCache:      make(map[string]struct{ rate float64; ts time.Time }),
+    }
 
 	// 设置双向持仓模式（Hedge Mode）
 	// 这是必需的，因为代码中使用了 PositionSide (LONG/SHORT)
@@ -50,6 +60,138 @@ func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 	}
 
 	return trader
+}
+
+// GetTakerFeeRate 获取该 symbol 的 USDT-M 合约 taker 费率（按账户等级）
+// 使用 /papi/v1/um/commissionRate，缓存 15 分钟
+func (t *FuturesTrader) GetTakerFeeRate(symbol string) (float64, error) {
+    // 命中缓存
+    t.feeCacheMutex.RLock()
+    if v, ok := t.feeCache[strings.ToUpper(symbol)]; ok {
+        if time.Since(v.ts) < 15*time.Minute {
+            t.feeCacheMutex.RUnlock()
+            return v.rate, nil
+        }
+    }
+    t.feeCacheMutex.RUnlock()
+
+    if t.pClient == nil {
+        return 0, fmt.Errorf("portfolio client not initialized")
+    }
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    res, err := t.pClient.NewGetUMCommissionRateService().Symbol(strings.ToUpper(symbol)).Do(ctx)
+    if err != nil {
+        return 0, err
+    }
+    rate, err := strconv.ParseFloat(res.TakerCommissionRate, 64)
+    if err != nil {
+        return 0, fmt.Errorf("parse takerCommissionRate failed: %w", err)
+    }
+    // 写缓存
+    t.feeCacheMutex.Lock()
+    t.feeCache[strings.ToUpper(symbol)] = struct{ rate float64; ts time.Time }{rate: rate, ts: time.Now()}
+    t.feeCacheMutex.Unlock()
+    return rate, nil
+}
+
+// GetUserTrades 拉取指定时间窗口内该 symbol 的成交明细（基于合约 /fapi/v1/userTrades）
+// 注意：此接口返回 realizedPnl、commission、commissionAsset、positionSide 等关键字段
+func (t *FuturesTrader) GetUserTrades(symbol string, start, end time.Time, limit int) ([]StdUMTrade, error) {
+    if t.client == nil {
+        return nil, fmt.Errorf("futures client not initialized")
+    }
+    if limit <= 0 || limit > 1000 {
+        limit = 1000
+    }
+    svc := t.client.NewListAccountTradeService().
+        Symbol(strings.ToUpper(symbol)).
+        StartTime(start.UnixMilli()).
+        EndTime(end.UnixMilli()).
+        Limit(limit)
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    res, err := svc.Do(ctx)
+    if err != nil {
+        return nil, err
+    }
+    out := make([]StdUMTrade, 0, len(res))
+    for _, tr := range res {
+        price, _ := strconv.ParseFloat(tr.Price, 64)
+        qty, _ := strconv.ParseFloat(tr.Quantity, 64)
+        rpnl, _ := strconv.ParseFloat(tr.RealizedPnl, 64)
+        comm, _ := strconv.ParseFloat(tr.Commission, 64)
+        out = append(out, StdUMTrade{
+            Symbol:          tr.Symbol,
+            OrderID:         tr.OrderID,
+            Side:            string(tr.Side),
+            Price:           price,
+            Qty:             qty,
+            RealizedPnl:     rpnl,
+            Commission:      comm,
+            CommissionAsset: tr.CommissionAsset,
+            Time:            time.UnixMilli(tr.Time),
+            PositionSide:    string(tr.PositionSide),
+            Maker:           tr.Maker,
+        })
+    }
+    return out, nil
+}
+
+// GetStopTakePrices 查询该symbol当前挂着的止损/止盈（按持仓方向筛选）。
+func (t *FuturesTrader) GetStopTakePrices(symbol string, positionSide string) (float64, float64, error) {
+    // 列出未完成订单
+    orders, err := t.client.NewListOpenOrdersService().
+        Symbol(symbol).
+        Do(context.Background())
+    if err != nil {
+        return 0, 0, fmt.Errorf("获取未完成订单失败: %w", err)
+    }
+
+    var sl, tp float64
+    var slSet, tpSet bool
+
+    // 选择规则：
+    // - 止损（STOP/STOP_MARKET）：
+    //   LONG 选择价格最高的（更接近当前价）；SHORT 选择价格最低的。
+    // - 止盈（TAKE_PROFIT/TAKE_PROFIT_MARKET）：
+    //   LONG 选择价格最低的；SHORT 选择价格最高的（更接近当前价）。
+    for _, o := range orders {
+        // 仅匹配对应方向（Binance返回的 PositionSide 为 "LONG"/"SHORT"/"BOTH"）
+        // 我们优先严格匹配传入的方向；若交易所返回 BOTH，则也纳入考虑（兼容某些账户设置）。
+        if string(o.PositionSide) != positionSide && string(o.PositionSide) != "BOTH" {
+            continue
+        }
+        // 解析价格
+        price, _ := strconv.ParseFloat(o.StopPrice, 64)
+        if price <= 0 {
+            continue
+        }
+        switch o.Type {
+        case futures.OrderTypeStop, futures.OrderTypeStopMarket:
+            if !slSet {
+                sl, slSet = price, true
+            } else {
+                if positionSide == "LONG" {
+                    if price > sl { sl = price }
+                } else {
+                    if price < sl { sl = price }
+                }
+            }
+        case futures.OrderTypeTakeProfit, futures.OrderTypeTakeProfitMarket:
+            if !tpSet {
+                tp, tpSet = price, true
+            } else {
+                if positionSide == "LONG" {
+                    if price < tp { tp = price }
+                } else {
+                    if price > tp { tp = price }
+                }
+            }
+        }
+    }
+    return sl, tp, nil
 }
 
 // setDualSidePosition 设置双向持仓模式（初始化时调用）

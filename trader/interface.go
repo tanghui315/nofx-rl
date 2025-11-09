@@ -1,5 +1,7 @@
 package trader
 
+import "time"
+
 // Trader 交易器统一接口
 // 支持多个交易平台（币安、Hyperliquid等）
 type Trader interface {
@@ -45,9 +47,30 @@ type Trader interface {
 	// CancelAllOrders 取消该币种的所有挂单
 	CancelAllOrders(symbol string) error
 
-	// CancelStopOrders 取消该币种的止盈/止损单（用于调整止盈止损位置）
-	CancelStopOrders(symbol string) error
+    // CancelStopOrders 取消该币种的止盈/止损单（用于调整止盈止损位置）
+    CancelStopOrders(symbol string) error
 
-	// FormatQuantity 格式化数量到正确的精度
-	FormatQuantity(symbol string, quantity float64) (string, error)
+    // FormatQuantity 格式化数量到正确的精度
+    FormatQuantity(symbol string, quantity float64) (string, error)
+
+    // GetStopTakePrices 查询当前挂着的止损/止盈价格（若存在）。
+    // positionSide: "LONG" 或 "SHORT"（某些交易所可能不区分，返回符号维度的价格）
+    // 返回：stopLoss, takeProfit（不存在时为0）
+    GetStopTakePrices(symbol string, positionSide string) (float64, float64, error)
+}
+
+// StdUMTrade 标准化的交易填充（统一账户/合约）
+// 用于基于交易所数据对账与绩效计算
+type StdUMTrade struct {
+    Symbol          string    // 交易对，如 BNBUSDT
+    OrderID         int64     // 订单ID
+    Side            string    // BUY / SELL
+    Price           float64   // 成交价
+    Qty             float64   // 成交量（合约张数/币）
+    RealizedPnl     float64   // 该笔成交实现盈亏（USDT）
+    Commission      float64   // 佣金（以 CommissionAsset 计价）
+    CommissionAsset string    // 佣金资产，如 USDT/BNB
+    Time            time.Time // 成交时间
+    PositionSide    string    // LONG / SHORT
+    Maker           bool      // 是否挂单方
 }

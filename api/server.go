@@ -3,16 +3,20 @@ package api
 import (
     "encoding/json"
     "fmt"
+    "math"
     "log"
     "net"
     "net/http"
+    "sort"
     "nofx/auth"
     "nofx/config"
     "nofx/decision"
     "nofx/manager"
+    "nofx/logger"
     "nofx/market"
     "nofx/news"
-    "nofx/trader"
+    traderpkg "nofx/trader"
+    "os"
     "strconv"
     "strings"
     "time"
@@ -571,19 +575,27 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 			balanceInfo, balanceErr := tempTrader.GetBalance()
 			if balanceErr != nil {
 				log.Printf("⚠️ 查询交易所余额失败，使用用户输入的初始资金: %v", balanceErr)
-			} else {
-				// 提取可用余额
-				if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
-					actualBalance = availableBalance
-					log.Printf("✓ 查询到交易所实际余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
-				} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
-					// 有些交易所可能只返回 balance 字段
-					actualBalance = totalBalance
-					log.Printf("✓ 查询到交易所实际余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
-				} else {
-					log.Printf("⚠️ 无法从余额信息中提取可用余额，使用用户输入的初始资金")
-				}
-			}
+            } else {
+                // 优先使用“净值”作为基线：wallet + unrealized
+                if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
+                    if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
+                        actualBalance = wallet + unpnl
+                        log.Printf("✓ 查询到交易所净值(钱包+未实现): %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
+                    }
+                }
+                // 退化到 available_balance 或 balance
+                if actualBalance <= 0 {
+                    if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
+                        actualBalance = availableBalance
+                        log.Printf("✓ 查询到交易所可用余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
+                    } else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
+                        actualBalance = totalBalance
+                        log.Printf("✓ 查询到交易所余额: %.2f USDT (用户输入: %.2f USDT)", actualBalance, req.InitialBalance)
+                    } else {
+                        log.Printf("⚠️ 无法从余额信息中提取净值/余额，使用用户输入的初始资金")
+                    }
+                }
+            }
 		}
 	}
 
@@ -950,18 +962,26 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 		return
 	}
 
-	// 提取可用余额
-	var actualBalance float64
-	if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
-		actualBalance = availableBalance
-	} else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
-		actualBalance = availableBalance
-	} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
-		actualBalance = totalBalance
-	} else {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取可用余额"})
-		return
-	}
+    // 优先计算“净值”= 钱包 + 未实现盈亏
+    var actualBalance float64
+    if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
+        if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
+            actualBalance = wallet + unpnl
+        }
+    }
+    // 退化到 available/balance
+    if actualBalance <= 0 {
+        if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
+            actualBalance = availableBalance
+        } else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
+            actualBalance = availableBalance
+        } else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
+            actualBalance = totalBalance
+        } else {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取账户净值/余额"})
+            return
+        }
+    }
 
 	oldBalance := traderConfig.InitialBalance
 
@@ -1553,17 +1573,194 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		return
 	}
 
-	// 分析最近100个周期的交易表现（避免长期持仓的交易记录丢失）
-	// 假设每3分钟一个周期，100个周期 = 5小时，足够覆盖大部分交易
-	performance, err := trader.GetDecisionLogger().AnalyzePerformance(100)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("分析历史表现失败: %v", err),
-		})
-		return
-	}
+    // 支持自定义窗口：默认100周期，可通过 ?lookback=300 调整（上限1000，防止性能问题）
+    lookback := 100
+    if v := c.Query("lookback"); v != "" {
+        if n, err := strconv.Atoi(v); err == nil {
+            if n > 0 && n <= 1000 {
+                lookback = n
+            }
+        }
+    }
+    // 构造费率解析器：优先调用交易员真实费率查询，回退到环境/默认
+    exch := trader.GetExchange()
+    resolver := func(symbol string) float64 {
+        // 优先尝试真实费率（如果底层交易器实现了）
+        if r := trader.GetTakerFeeRate(symbol); r > 0 {
+            return r
+        }
+        key := "NOFX_TAKER_FEE_RATE_" + strings.ToUpper(exch)
+        if v := os.Getenv(key); v != "" {
+            if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+                return f
+            }
+        }
+        if v := os.Getenv("NOFX_TAKER_FEE_RATE"); v != "" {
+            if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+                return f
+            }
+        }
+        // 默认：不同交易所可设置略不同的兜底
+        switch strings.ToLower(exch) {
+        case "binance":
+            return 0.0004
+        case "hyperliquid":
+            return 0.0005
+        case "aster":
+            return 0.0005
+        default:
+            return 0.0004
+        }
+    }
+    // 优先尝试：基于交易所 userTrades 的对账（更准确，包含手续费与强平/止损）
+    // 1) 收集时间窗口与涉及的 symbol 集合
+    records, _ := trader.GetDecisionLogger().GetLatestRecords(lookback)
+    var (
+        startTime time.Time
+        endTime   time.Time
+    )
+    symSet := map[string]struct{}{}
+    if len(records) > 0 {
+        startTime = records[0].Timestamp
+        endTime = records[len(records)-1].Timestamp
+        for _, r := range records {
+            for _, d := range r.Decisions { if d.Symbol != "" { symSet[strings.ToUpper(d.Symbol)] = struct{}{} } }
+        }
+    } else {
+        // 退化：按 lookback*3m 估一个时间窗
+        endTime = time.Now()
+        startTime = endTime.Add(-time.Duration(lookback*3) * time.Minute)
+    }
+    // 构造符号列表
+    var symbols []string
+    for ssym := range symSet { symbols = append(symbols, ssym) }
+    // 2) 拉取交易并计算绩效
+    exchangeAnalysis, exErr := func() (*logger.PerformanceAnalysis, error) {
+        if len(symbols) == 0 { return nil, fmt.Errorf("no symbols from decisions") }
+        priceCache := map[string]float64{}
+        priceOf := func(asset string) (float64, error) {
+            a := strings.ToUpper(strings.TrimSpace(asset))
+            if a == "" || a == "USDT" { return 1, nil }
+            if v, ok := priceCache[a]; ok { return v, nil }
+            // 通过现有市场层转换资产到 USDT
+            data, err := market.Get(a + "USDT")
+            if err != nil { return 0, err }
+            priceCache[a] = data.CurrentPrice
+            return data.CurrentPrice, nil
+        }
 
-	c.JSON(http.StatusOK, performance)
+        // 收集所有 trades
+        type key struct{ sym, side string }
+        grouped := map[key][]traderpkg.StdUMTrade{}
+        for _, sym := range symbols {
+            trs, err := trader.GetUserTrades(sym, startTime, endTime, 1000)
+            if err != nil { return nil, err }
+            for _, t := range trs {
+                k := key{strings.ToUpper(t.Symbol), strings.ToUpper(t.PositionSide)}
+                grouped[k] = append(grouped[k], t)
+            }
+        }
+        // 聚合为闭环交易周期
+        analysis := &logger.PerformanceAnalysis{ RecentTrades: []logger.TradeOutcome{}, SymbolStats: map[string]*logger.SymbolPerformance{} }
+        for k, list := range grouped {
+            // 按时间升序
+            sort.Slice(list, func(i, j int) bool { return list[i].Time.Before(list[j].Time) })
+            qty := 0.0
+            entryNotional := 0.0
+            entryQty := 0.0
+            openTime := time.Time{}
+            realized := 0.0
+            feeUSDT := 0.0
+            for _, tr := range list {
+                // 佣金换算为 USDT
+                if tr.Commission > 0 {
+                    if px, err := priceOf(tr.CommissionAsset); err == nil && px > 0 {
+                        feeUSDT += tr.Commission * px
+                    }
+                }
+                // 判断进出场：
+                isEntry := (k.side == "LONG" && strings.ToUpper(tr.Side) == "BUY") || (k.side == "SHORT" && strings.ToUpper(tr.Side) == "SELL")
+                // 数量更新（以正数度量）
+                q := tr.Qty
+                if k.side == "LONG" {
+                    if strings.ToUpper(tr.Side) == "BUY" { qty += q } else { qty -= q }
+                } else { // SHORT
+                    if strings.ToUpper(tr.Side) == "SELL" { qty += q } else { qty -= q }
+                }
+                if isEntry {
+                    if entryQty == 0 { openTime = tr.Time }
+                    entryNotional += tr.Price * q
+                    entryQty += q
+                }
+                // 实现盈亏直接累加
+                realized += tr.RealizedPnl
+
+                // 闭环（仓位归零）
+                if math.Abs(qty) < 1e-9 && entryQty > 0 {
+                    openPrice := entryNotional / entryQty
+                    positionValue := openPrice * entryQty
+                    // 无法精准获知杠杆/保证金，保持0以避免误导
+                    outcome := logger.TradeOutcome{
+                        Symbol:        k.sym,
+                        Side:          strings.ToLower(k.side),
+                        Quantity:      entryQty,
+                        Leverage:      0,
+                        OpenPrice:     openPrice,
+                        ClosePrice:    tr.Price,
+                        PositionValue: positionValue,
+                        MarginUsed:    0,
+                        PnL:           realized - feeUSDT,
+                        PnLPct:        0,
+                        Duration:      tr.Time.Sub(openTime).String(),
+                        OpenTime:      openTime,
+                        CloseTime:     tr.Time,
+                        WasStopLoss:   false,
+                    }
+                    analysis.RecentTrades = append(analysis.RecentTrades, outcome)
+                    analysis.TotalTrades++
+                    if outcome.PnL > 0 { analysis.WinningTrades++; analysis.AvgWin += outcome.PnL } else if outcome.PnL < 0 { analysis.LosingTrades++; analysis.AvgLoss += outcome.PnL }
+                    if _, ok := analysis.SymbolStats[k.sym]; !ok { analysis.SymbolStats[k.sym] = &logger.SymbolPerformance{ Symbol: k.sym } }
+                    st := analysis.SymbolStats[k.sym]; st.TotalTrades++; st.TotalPnL += outcome.PnL; if outcome.PnL > 0 { st.WinningTrades++ } else if outcome.PnL < 0 { st.LosingTrades++ }
+
+                    // 重置状态，继续下一周期
+                    qty, entryNotional, entryQty, openTime, realized, feeUSDT = 0, 0, 0, time.Time{}, 0, 0
+                }
+            }
+        }
+        // 统计指标
+        if analysis.TotalTrades > 0 {
+            analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
+            totalWin := analysis.AvgWin
+            totalLoss := analysis.AvgLoss
+            if analysis.WinningTrades > 0 { analysis.AvgWin /= float64(analysis.WinningTrades) }
+            if analysis.LosingTrades > 0 { analysis.AvgLoss /= float64(analysis.LosingTrades) }
+            if totalLoss != 0 { analysis.ProfitFactor = totalWin / (-totalLoss) } else if totalWin > 0 { analysis.ProfitFactor = 999.0 }
+        }
+        best := -1e12; worst := 1e12
+        for sym, st := range analysis.SymbolStats { if st.TotalTrades > 0 { st.WinRate = (float64(st.WinningTrades)/float64(st.TotalTrades))*100; st.AvgPnL = st.TotalPnL/float64(st.TotalTrades); if st.TotalPnL > best { best = st.TotalPnL; analysis.BestSymbol = sym }; if st.TotalPnL < worst { worst = st.TotalPnL; analysis.WorstSymbol = sym } } }
+        // 倒序保留最近10个
+        if n := len(analysis.RecentTrades); n > 1 { for i, j := 0, n-1; i<j; i,j=i+1,j-1 { analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i] } }
+        if len(analysis.RecentTrades) > 10 { analysis.RecentTrades = analysis.RecentTrades[:10] }
+        // 夏普比率回退到日志净值序列计算
+        analysis.SharpeRatio = trader.GetDecisionLogger().CalculateSharpeForWindow(records)
+        return analysis, nil
+    }()
+
+    if exErr == nil && exchangeAnalysis != nil && exchangeAnalysis.TotalTrades > 0 {
+        c.JSON(http.StatusOK, exchangeAnalysis)
+        return
+    }
+
+    // 回退：基于日志的分析（带费率解析器）
+    performance, err := trader.GetDecisionLogger().AnalyzePerformanceWithFee(lookback, resolver)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{
+            "error": fmt.Sprintf("分析历史表现失败: %v", err),
+        })
+        return
+    }
+
+    c.JSON(http.StatusOK, performance)
 }
 
 // authMiddleware JWT认证中间件

@@ -1033,6 +1033,52 @@ func (t *AsterTrader) SetTakeProfit(symbol string, positionSide string, quantity
 	return err
 }
 
+// GetStopTakePrices 查询该symbol当前挂着的止损/止盈价格（Aster API不区分方向，返回符号维度）。
+func (t *AsterTrader) GetStopTakePrices(symbol string, positionSide string) (float64, float64, error) {
+    params := map[string]interface{}{
+        "symbol": symbol,
+    }
+    body, err := t.request("GET", "/fapi/v3/openOrders", params)
+    if err != nil {
+        return 0, 0, fmt.Errorf("获取未完成订单失败: %w", err)
+    }
+    var orders []map[string]interface{}
+    if err := json.Unmarshal(body, &orders); err != nil {
+        return 0, 0, fmt.Errorf("解析订单数据失败: %w", err)
+    }
+
+    var sl, tp float64
+    var slSet, tpSet bool
+    // Aster 返回的 positionSide 可能为 BOTH，这里不严格按方向筛
+    for _, o := range orders {
+        tpe, _ := o["type"].(string)
+        spStr, _ := o["stopPrice"].(string)
+        if spStr == "" { continue }
+        price, _ := strconv.ParseFloat(spStr, 64)
+        if price <= 0 { continue }
+        switch tpe {
+        case "STOP", "STOP_MARKET":
+            if !slSet { sl, slSet = price, true } else {
+                // 参考Binance的规则：按方向选择更近的
+                if positionSide == "LONG" {
+                    if price > sl { sl = price }
+                } else {
+                    if price < sl { sl = price }
+                }
+            }
+        case "TAKE_PROFIT", "TAKE_PROFIT_MARKET":
+            if !tpSet { tp, tpSet = price, true } else {
+                if positionSide == "LONG" {
+                    if price < tp { tp = price }
+                } else {
+                    if price > tp { tp = price }
+                }
+            }
+        }
+    }
+    return sl, tp, nil
+}
+
 // CancelStopLossOrders 仅取消止损单（不影响止盈单）
 func (t *AsterTrader) CancelStopLossOrders(symbol string) error {
 	// 获取该币种的所有未完成订单

@@ -721,6 +721,12 @@ func (t *HyperliquidTrader) SetTakeProfit(symbol string, positionSide string, qu
 	return nil
 }
 
+// GetStopTakePrices 查询止损/止盈（Hyperliquid SDK OpenOrder 暂不暴露触发信息，返回0）
+func (t *HyperliquidTrader) GetStopTakePrices(symbol string, positionSide string) (float64, float64, error) {
+    // 无法从 OpenOrders 区分 TP/SL，返回 0 表示未知
+    return 0, 0, nil
+}
+
 // FormatQuantity 格式化数量到正确的精度
 func (t *HyperliquidTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	coin := convertSymbolToHyperliquid(symbol)

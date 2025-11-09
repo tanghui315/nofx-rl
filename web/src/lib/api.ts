@@ -325,9 +325,11 @@ export const api = {
 
   // 获取AI学习表现分析（支持trader_id）
   async getPerformance(traderId?: string): Promise<any> {
+    // 默认扩大窗口以获得更稳定的统计（可根据需要调整）
+    const lookback = 500
     const url = traderId
-      ? `${API_BASE}/performance?trader_id=${traderId}`
-      : `${API_BASE}/performance`
+      ? `${API_BASE}/performance?trader_id=${traderId}&lookback=${lookback}`
+      : `${API_BASE}/performance?lookback=${lookback}`
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })

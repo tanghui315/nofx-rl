@@ -1,13 +1,14 @@
 package logger
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"math"
-	"os"
-	"path/filepath"
-	"time"
+    "encoding/json"
+    "fmt"
+    "io/ioutil"
+    "math"
+    "os"
+    "path/filepath"
+    "strconv"
+    "time"
 )
 
 // DecisionRecord 决策记录
@@ -321,8 +322,41 @@ type SymbolPerformance struct {
 	AvgPnL        float64 `json:"avg_pn_l"`       // 平均盈亏
 }
 
-// AnalyzePerformance 分析最近N个周期的交易表现
+// normalizeAction 规范化动作名称并推断方向
+// 返回: 标准动作类型(open/close/partial_close/auto_close/other) 与 方向(long/short/"")
+func normalizeAction(act string) (string, string) {
+    switch act {
+    case "open_long":
+        return "open", "long"
+    case "open_short":
+        return "open", "short"
+    case "close_long":
+        return "close", "long"
+    case "close_short":
+        return "close", "short"
+    case "auto_close_long":
+        return "auto_close", "long"
+    case "auto_close_short":
+        return "auto_close", "short"
+    case "partial_close":
+        return "partial_close", ""
+    case "partial_close_long", "reduce_long":
+        return "partial_close", "long"
+    case "partial_close_short", "reduce_short":
+        return "partial_close", "short"
+    default:
+        return act, ""
+    }
+}
+
+// AnalyzePerformance 向后兼容的分析函数，使用默认费率解析器（环境变量 NOFX_TAKER_FEE_RATE 或 0.0004）
 func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAnalysis, error) {
+    return l.AnalyzePerformanceWithFee(lookbackCycles, nil)
+}
+
+// AnalyzePerformance 分析最近N个周期的交易表现
+// AnalyzePerformanceWithFee 支持自定义费用解析器（按 symbol 返回 taker 费率，单位比例，如0.0004）
+func (l *DecisionLogger) AnalyzePerformanceWithFee(lookbackCycles int, feeResolver func(symbol string) float64) (*PerformanceAnalysis, error) {
 	records, err := l.GetLatestRecords(lookbackCycles)
 	if err != nil {
 		return nil, fmt.Errorf("读取历史记录失败: %w", err)
@@ -335,10 +369,21 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		}, nil
 	}
 
-	analysis := &PerformanceAnalysis{
-		RecentTrades: []TradeOutcome{},
-		SymbolStats:  make(map[string]*SymbolPerformance),
-	}
+    analysis := &PerformanceAnalysis{
+        RecentTrades: []TradeOutcome{},
+        SymbolStats:  make(map[string]*SymbolPerformance),
+    }
+
+    // 交易费用（默认 Taker 0.04%/腿）；若提供 feeResolver 则优先使用（可按 symbol 可变）
+    defaultFee := 0.0004
+    if v := os.Getenv("NOFX_TAKER_FEE_RATE"); v != "" {
+        if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+            defaultFee = f
+        }
+    }
+    if feeResolver == nil {
+        feeResolver = func(symbol string) float64 { return defaultFee }
+    }
 
 	// 追踪持仓状态：symbol_side -> {side, openPrice, openTime, quantity, leverage}
 	openPositions := make(map[string]map[string]interface{})
@@ -348,100 +393,87 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	allRecords, err := l.GetLatestRecords(lookbackCycles * 3) // 扩大3倍窗口
 	if err == nil && len(allRecords) > len(records) {
 		// 先从扩大的窗口中收集所有开仓记录
-		for _, record := range allRecords {
-			for _, action := range record.Decisions {
-				if !action.Success {
-					continue
-				}
+        for _, record := range allRecords {
+            for _, action := range record.Decisions {
+                if !action.Success {
+                    continue
+                }
 
-				symbol := action.Symbol
-				side := ""
-				if action.Action == "open_long" || action.Action == "close_long" || action.Action == "partial_close" || action.Action == "auto_close_long" {
-					side = "long"
-				} else if action.Action == "open_short" || action.Action == "close_short" || action.Action == "auto_close_short" {
-					side = "short"
-				}
+                symbol := action.Symbol
+                normType, side := normalizeAction(action.Action)
+                // 若 partial_close 未显式带方向，尝试从已知持仓中推断
+                if normType == "partial_close" && side == "" {
+                    for key, pos := range openPositions {
+                        if posSymbol, _ := pos["side"].(string); key == symbol+"_"+posSymbol {
+                            side = posSymbol
+                            break
+                        }
+                    }
+                }
 
-				// partial_close 需要根據持倉判斷方向
-				if action.Action == "partial_close" && side == "" {
-					for key, pos := range openPositions {
-						if posSymbol, _ := pos["side"].(string); key == symbol+"_"+posSymbol {
-							side = posSymbol
-							break
-						}
-					}
-				}
+                posKey := symbol + "_" + side
 
-				posKey := symbol + "_" + side
-
-				switch action.Action {
-				case "open_long", "open_short":
-					// 记录开仓
-					openPositions[posKey] = map[string]interface{}{
-						"side":      side,
-						"openPrice": action.Price,
-						"openTime":  action.Timestamp,
-						"quantity":  action.Quantity,
-						"leverage":  action.Leverage,
-					}
-				case "close_long", "close_short", "auto_close_long", "auto_close_short":
-					// 移除已平仓记录
-					delete(openPositions, posKey)
-					// partial_close 不處理，保留持倉記錄
-				}
-			}
-		}
+                switch normType {
+                case "open":
+                    // 记录开仓
+                    openPositions[posKey] = map[string]interface{}{
+                        "side":      side,
+                        "openPrice": action.Price,
+                        "openTime":  action.Timestamp,
+                        "quantity":  action.Quantity,
+                        "leverage":  action.Leverage,
+                    }
+                case "close", "auto_close":
+                    // 移除已平仓记录
+                    delete(openPositions, posKey)
+                    // partial_close 不處理，保留持倉記錄
+                }
+            }
+        }
 	}
 
 	// 遍历分析窗口内的记录，生成交易结果
 	for _, record := range records {
-		for _, action := range record.Decisions {
-			if !action.Success {
-				continue
-			}
+        for _, action := range record.Decisions {
+            if !action.Success {
+                continue
+            }
 
-			symbol := action.Symbol
-			side := ""
-			if action.Action == "open_long" || action.Action == "close_long" || action.Action == "partial_close" || action.Action == "auto_close_long" {
-				side = "long"
-			} else if action.Action == "open_short" || action.Action == "close_short" || action.Action == "auto_close_short" {
-				side = "short"
-			}
+            symbol := action.Symbol
+            normType, side := normalizeAction(action.Action)
+            // partial_close 推断方向
+            if normType == "partial_close" && side == "" {
+                for key, pos := range openPositions {
+                    if posSymbol, _ := pos["side"].(string); key == symbol+"_"+posSymbol {
+                        side = posSymbol
+                        break
+                    }
+                }
+            }
 
-			// partial_close 需要根據持倉判斷方向
-			if action.Action == "partial_close" {
-				// 從 openPositions 中查找持倉方向
-				for key, pos := range openPositions {
-					if posSymbol, _ := pos["side"].(string); key == symbol+"_"+posSymbol {
-						side = posSymbol
-						break
-					}
-				}
-			}
+            posKey := symbol + "_" + side // 使用symbol_side作为key，区分多空持仓
 
-			posKey := symbol + "_" + side // 使用symbol_side作为key，区分多空持仓
+            switch normType {
+            case "open":
+                // 更新开仓记录（可能已经在预填充时记录过了）
+                openPositions[posKey] = map[string]interface{}{
+                    "side":               side,
+                    "openPrice":          action.Price,
+                    "openTime":           action.Timestamp,
+                    "quantity":           action.Quantity,
+                    "leverage":           action.Leverage,
+                    "remainingQuantity":  action.Quantity, // 🔧 BUG FIX：追蹤剩餘數量
+                    "accumulatedPnL":     0.0,             // 🔧 BUG FIX：累積部分平倉盈虧
+                    "partialCloseCount":  0,               // 🔧 BUG FIX：部分平倉次數
+                    "partialCloseVolume": 0.0,             // 🔧 BUG FIX：部分平倉總量
+                }
 
-			switch action.Action {
-			case "open_long", "open_short":
-				// 更新开仓记录（可能已经在预填充时记录过了）
-				openPositions[posKey] = map[string]interface{}{
-					"side":               side,
-					"openPrice":          action.Price,
-					"openTime":           action.Timestamp,
-					"quantity":           action.Quantity,
-					"leverage":           action.Leverage,
-					"remainingQuantity":  action.Quantity, // 🔧 BUG FIX：追蹤剩餘數量
-					"accumulatedPnL":     0.0,             // 🔧 BUG FIX：累積部分平倉盈虧
-					"partialCloseCount":  0,               // 🔧 BUG FIX：部分平倉次數
-					"partialCloseVolume": 0.0,             // 🔧 BUG FIX：部分平倉總量
-				}
-
-			case "close_long", "close_short", "partial_close", "auto_close_long", "auto_close_short":
-				// 查找对应的开仓记录（可能来自预填充或当前窗口）
-				if openPos, exists := openPositions[posKey]; exists {
-					openPrice := openPos["openPrice"].(float64)
-					openTime := openPos["openTime"].(time.Time)
-					side := openPos["side"].(string)
+            case "close", "partial_close", "auto_close":
+                // 查找对应的开仓记录（可能来自预填充或当前窗口）
+                if openPos, exists := openPositions[posKey]; exists {
+                    openPrice := openPos["openPrice"].(float64)
+                    openTime := openPos["openTime"].(time.Time)
+                    side := openPos["side"].(string)
 					quantity := openPos["quantity"].(float64)
 					leverage := openPos["leverage"].(int)
 
@@ -460,13 +492,18 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 						actualQuantity = action.Quantity
 					}
 
-					// 计算本次平仓的盈亏（USDT）
-					var pnl float64
-					if side == "long" {
-						pnl = actualQuantity * (action.Price - openPrice)
-					} else {
-						pnl = actualQuantity * (openPrice - action.Price)
-					}
+                // 计算本次平仓的盈亏（USDT），并扣除手续费（按开/平各一次）
+                var pnl float64
+                if side == "long" {
+                    pnl = actualQuantity * (action.Price - openPrice)
+                } else {
+                    pnl = actualQuantity * (openPrice - action.Price)
+                }
+                // 手续费 = 名义价值 × 费率（开 + 平）；费率可按 symbol 解析
+                feeRate := feeResolver(symbol)
+                openFee := actualQuantity * openPrice * feeRate
+                closeFee := actualQuantity * action.Price * feeRate
+                pnl -= (openFee + closeFee)
 
 					// 🔧 BUG FIX：處理 partial_close 聚合邏輯
 					if action.Action == "partial_close" {
@@ -543,7 +580,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 					} else {
 						// 🔧 完全平倉（close_long/close_short/auto_close）
 						// 如果之前有部分平倉，需要加上累積的 PnL
-						totalPnL := accumulatedPnL + pnl
+                    totalPnL := accumulatedPnL + pnl
 
 						positionValue := quantity * openPrice
 						marginUsed := positionValue / float64(leverage)
@@ -552,12 +589,12 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 							pnlPct = (totalPnL / marginUsed) * 100
 						}
 
-						outcome := TradeOutcome{
-							Symbol:        symbol,
-							Side:          side,
-							Quantity:      quantity, // 使用原始總量
-							Leverage:      leverage,
-							OpenPrice:     openPrice,
+                    outcome := TradeOutcome{
+                        Symbol:        symbol,
+                        Side:          side,
+                        Quantity:      quantity, // 使用原始總量
+                        Leverage:      leverage,
+                        OpenPrice:     openPrice,
 							ClosePrice:    action.Price,
 							PositionValue: positionValue,
 							MarginUsed:    marginUsed,
@@ -733,4 +770,9 @@ func (l *DecisionLogger) calculateSharpeRatio(records []*DecisionRecord) float64
 	// 注：直接返回周期级别的夏普比率（非年化），正常范围 -2 到 +2
 	sharpeRatio := meanReturn / stdDev
 	return sharpeRatio
+}
+
+// CalculateSharpeForWindow 对外暴露：基于给定窗口记录计算夏普比率
+func (l *DecisionLogger) CalculateSharpeForWindow(records []*DecisionRecord) float64 {
+    return l.calculateSharpeRatio(records)
 }

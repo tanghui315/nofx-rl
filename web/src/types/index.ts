@@ -37,6 +37,8 @@ export interface Position {
   unrealized_pnl_pct: number
   liquidation_price: number
   margin_used: number
+  stop_loss?: number
+  take_profit?: number
 }
 
 // 决策动作
