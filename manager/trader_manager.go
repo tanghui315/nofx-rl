@@ -845,6 +845,155 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 	return nil
 }
 
+// LoadTraderByID 加载指定ID的单个交易员到内存
+// 此方法会自动查询所需的所有配置（AI模型、交易所、系统配置等）
+// 参数:
+//   - database: 数据库实例
+//   - userID: 用户ID
+//   - traderID: 交易员ID
+// 返回:
+//   - error: 如果交易员不存在、配置无效或加载失败则返回错误
+func (tm *TraderManager) LoadTraderByID(database *config.Database, userID, traderID string) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	// 1. 检查是否已加载
+	if _, exists := tm.traders[traderID]; exists {
+		log.Printf("⚠️ 交易员 %s 已经加载，跳过", traderID)
+		return nil
+	}
+
+	// 2. 查询交易员配置
+	traders, err := database.GetTraders(userID)
+	if err != nil {
+		return fmt.Errorf("获取交易员列表失败: %w", err)
+	}
+
+	var traderCfg *config.TraderRecord
+	for _, t := range traders {
+		if t.ID == traderID {
+			traderCfg = t
+			break
+		}
+	}
+
+	if traderCfg == nil {
+		return fmt.Errorf("交易员 %s 不存在", traderID)
+	}
+
+	// 3. 查询AI模型配置
+	aiModels, err := database.GetAIModels(userID)
+	if err != nil {
+		return fmt.Errorf("获取AI模型配置失败: %w", err)
+	}
+
+	var aiModelCfg *config.AIModelConfig
+	// 优先精确匹配 model.ID
+	for _, model := range aiModels {
+		if model.ID == traderCfg.AIModelID {
+			aiModelCfg = model
+			break
+		}
+	}
+	// 如果没有精确匹配，尝试匹配 provider（兼容旧数据）
+	if aiModelCfg == nil {
+		for _, model := range aiModels {
+			if model.Provider == traderCfg.AIModelID {
+				aiModelCfg = model
+				log.Printf("⚠️ 交易员 %s 使用旧版 provider 匹配: %s -> %s", traderCfg.Name, traderCfg.AIModelID, model.ID)
+				break
+			}
+		}
+	}
+
+	if aiModelCfg == nil {
+		return fmt.Errorf("AI模型 %s 不存在", traderCfg.AIModelID)
+	}
+
+	if !aiModelCfg.Enabled {
+		return fmt.Errorf("AI模型 %s 未启用", traderCfg.AIModelID)
+	}
+
+	// 4. 查询交易所配置
+	exchanges, err := database.GetExchanges(userID)
+	if err != nil {
+		return fmt.Errorf("获取交易所配置失败: %w", err)
+	}
+
+	var exchangeCfg *config.ExchangeConfig
+	for _, exchange := range exchanges {
+		if exchange.ID == traderCfg.ExchangeID {
+			exchangeCfg = exchange
+			break
+		}
+	}
+
+	if exchangeCfg == nil {
+		return fmt.Errorf("交易所 %s 不存在", traderCfg.ExchangeID)
+	}
+
+	if !exchangeCfg.Enabled {
+		return fmt.Errorf("交易所 %s 未启用", traderCfg.ExchangeID)
+	}
+
+	// 5. 查询系统配置
+	maxDailyLossStr, _ := database.GetSystemConfig("max_daily_loss")
+	maxDrawdownStr, _ := database.GetSystemConfig("max_drawdown")
+	stopTradingMinutesStr, _ := database.GetSystemConfig("stop_trading_minutes")
+	defaultCoinsStr, _ := database.GetSystemConfig("default_coins")
+
+	// 6. 查询用户信号源配置
+	var coinPoolURL, oiTopURL string
+	if userSignalSource, err := database.GetUserSignalSource(userID); err == nil {
+		coinPoolURL = userSignalSource.CoinPoolURL
+		oiTopURL = userSignalSource.OITopURL
+		log.Printf("📡 加载用户 %s 的信号源配置: COIN POOL=%s, OI TOP=%s", userID, coinPoolURL, oiTopURL)
+	} else {
+		log.Printf("🔍 用户 %s 暂未配置信号源", userID)
+	}
+
+	// 7. 解析系统配置
+	maxDailyLoss := 10.0 // 默认值
+	if val, err := strconv.ParseFloat(maxDailyLossStr, 64); err == nil {
+		maxDailyLoss = val
+	}
+
+	maxDrawdown := 20.0 // 默认值
+	if val, err := strconv.ParseFloat(maxDrawdownStr, 64); err == nil {
+		maxDrawdown = val
+	}
+
+	stopTradingMinutes := 60 // 默认值
+	if val, err := strconv.Atoi(stopTradingMinutesStr); err == nil {
+		stopTradingMinutes = val
+	}
+
+	// 解析默认币种列表
+	var defaultCoins []string
+	if defaultCoinsStr != "" {
+		if err := json.Unmarshal([]byte(defaultCoinsStr), &defaultCoins); err != nil {
+			log.Printf("⚠️ 解析默认币种配置失败: %v，使用空列表", err)
+			defaultCoins = []string{}
+		}
+	}
+
+	// 8. 调用私有方法加载交易员
+	log.Printf("📋 加载单个交易员: %s (%s)", traderCfg.Name, traderID)
+	return tm.loadSingleTrader(
+		traderCfg,
+		aiModelCfg,
+		exchangeCfg,
+		coinPoolURL,
+		oiTopURL,
+		maxDailyLoss,
+		maxDrawdown,
+		stopTradingMinutes,
+		defaultCoins,
+		database,
+		userID,
+	)
+}
+
 // loadSingleTrader 加载单个交易员（从现有代码提取的公共逻辑）
 func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, database *config.Database, userID string) error {
 	// 处理交易币种列表

@@ -629,9 +629,9 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	}
 
 	// 立即将新交易员加载到TraderManager中
-	err = s.traderManager.LoadUserTraders(s.database, userID)
+	err = s.traderManager.LoadTraderByID(s.database, userID, traderID)
 	if err != nil {
-		log.Printf("⚠️ 加载用户交易员到内存失败: %v", err)
+		log.Printf("⚠️ 加载交易员到内存失败: %v", err)
 		// 这里不返回错误，因为交易员已经成功创建到数据库
 	}
 
@@ -751,9 +751,9 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	}
 
 	// 重新加载交易员到内存
-	err = s.traderManager.LoadUserTraders(s.database, userID)
+	err = s.traderManager.LoadTraderByID(s.database, userID, traderID)
 	if err != nil {
-		log.Printf("⚠️ 重新加载用户交易员到内存失败: %v", err)
+		log.Printf("⚠️ 重新加载交易员到内存失败: %v", err)
 	}
 
 	log.Printf("✓ 更新交易员成功: %s (模型: %s, 交易所: %s)", req.Name, req.AIModelID, req.ExchangeID)
@@ -962,7 +962,7 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 		return
 	}
 
-	// 优先计算“净值”= 钱包 + 未实现盈亏
+	// 优先计算"净值"= 钱包 + 未实现盈亏
 	var actualBalance float64
 	if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
 		if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
@@ -1004,9 +1004,9 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	}
 
 	// 重新加载交易员到内存
-	err = s.traderManager.LoadUserTraders(s.database, userID)
+	err = s.traderManager.LoadTraderByID(s.database, userID, traderID)
 	if err != nil {
-		log.Printf("⚠️ 重新加载用户交易员到内存失败: %v", err)
+		log.Printf("⚠️ 重新加载交易员到内存失败: %v", err)
 	}
 
 	log.Printf("✅ 已同步余额: %.2f → %.2f USDT (%s %.2f%%)", oldBalance, actualBalance, changeType, changePercent)
