@@ -10,6 +10,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"nofx/telemetry"
 	"nofx/news"
 	"strings"
 	"sync"
@@ -534,6 +535,32 @@ func (at *AutoTrader) runCycle() error {
 	log.Print(strings.Repeat("-", 70))
 	// 8. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
 	log.Print(strings.Repeat("-", 70))
+
+	// 在执行前，记录最小 Tick 日志（供 Scout 使用）— 逐个决策写一行 JSONL；忽略错误
+	if decision != nil && len(decision.Decisions) > 0 {
+		for _, d := range decision.Decisions {
+			entry := telemetry.TickEntry{
+				TS:     time.Now().UTC().Format(time.RFC3339),
+				Symbol: d.Symbol,
+				Reason: "decision_tick",
+				Features: map[string]interface{}{
+					"btc_state":      map[string]interface{}{},
+					"checklist_hits": 0,
+				},
+				Risk: map[string]interface{}{
+					"margin_used_pct": ctx.Account.MarginUsedPct,
+					"positions":      ctx.Account.PositionCount,
+				},
+				Decision: map[string]interface{}{
+					"action":     d.Action,
+					"confidence": d.Confidence,
+				},
+			}
+			_ = telemetry.AppendJSONL(entry)
+			// 排队写标签：T+5/15/30/60 由 labeler 计算
+			telemetry.EnqueueLabel(d.Symbol, time.Now().UTC())
+		}
+	}
 
 	// 8. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
 	sortedDecisions := sortDecisionsByPriority(decision.Decisions)

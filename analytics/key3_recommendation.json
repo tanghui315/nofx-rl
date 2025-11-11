@@ -1,0 +1,9 @@
+{
+  "recommendation": "key3",
+  "ttl_minutes": 10,
+  "conditions": {
+    "tf_agree_min": ">=3",
+    "vol_z": ">=1.5",
+    "btc_support": true
+  }
+}

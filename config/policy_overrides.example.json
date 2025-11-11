@@ -1,0 +1,17 @@
+{
+  "meta": {"generated_at": "2025-01-01T23:30:00Z", "ttl_hours": 4, "approver": null},
+  "global": {
+    "confidence_threshold_base": {"value": 80, "min": 78, "max": 85},
+    "checklist_min_hits": {"default": 4, "allow_3_if": "key3_strong"},
+    "cooldown_minutes": {"base": 9, "min": 6, "max": 12},
+    "trial_entry": {"enabled": true, "confidence_band": "78..80", "risk_budget_pct": 0.5}
+  },
+  "regimes": {
+    "trending": {"confidence_threshold_base": 79, "btc_gate_weight": "high"},
+    "ranging":  {"strategy": "mean_revert_pref", "cooldown_minutes": 8}
+  },
+  "symbols": {
+    "ETHUSDT": {"confidence_threshold_base": 83}
+  },
+  "history_weights": {"winrate": 0.5, "similar_losses": -0.3, "global_sharpe": 0.5, "cap": 6}
+}

@@ -13,6 +13,8 @@ import (
     "nofx/news"
     "nofx/mcp"
     "nofx/pool"
+    "nofx/scout"
+    "nofx/telemetry"
     "os"
     "os/signal"
     "strconv"
@@ -166,7 +168,16 @@ func main() {
 
 	// Load environment variables from .env file if present (for local/dev runs)
 	// In Docker Compose, variables are injected by the runtime and this is harmless.
-	_ = godotenv.Load()
+    _ = godotenv.Load()
+    // 启动标签写入器（每分钟检查T+5/15/30/60是否到期并写 trade-labels.jsonl）
+    telemetry.StartLabeler()
+    // 启动 Scout 定时任务（每 ~45 分钟分析一次并生成覆盖文件；失败不影响主流程）
+    if os.Getenv("NOFX_DISABLE_SCOUT") == "1" {
+        log.Printf("🛈 Scout scheduler disabled by NOFX_DISABLE_SCOUT=1")
+    } else {
+        scout.StartScheduler()
+        log.Printf("🛈 Scout scheduler started (interval ~45m)")
+    }
 
     // 初始化数据库配置
     dbPath := "config.db"

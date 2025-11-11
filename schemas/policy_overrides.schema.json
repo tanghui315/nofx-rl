@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PolicyOverrides",
+  "type": "object",
+  "required": ["meta", "global"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["generated_at", "ttl_hours"],
+      "properties": {
+        "generated_at": {"type": "string", "format": "date-time"},
+        "ttl_hours": {"type": "number", "minimum": 0},
+        "approver": {"type": ["string", "null"]}
+      }
+    },
+    "global": {
+      "type": "object",
+      "properties": {
+        "confidence_threshold_base": {
+          "type": "object",
+          "required": ["value"],
+          "properties": {
+            "value": {"type": "number"},
+            "min": {"type": "number"},
+            "max": {"type": "number"}
+          }
+        },
+        "checklist_min_hits": {
+          "type": "object",
+          "properties": {
+            "default": {"type": "integer"},
+            "allow_3_if": {"type": "string"}
+          }
+        },
+        "cooldown_minutes": {
+          "type": "object",
+          "properties": {
+            "base": {"type": "number"},
+            "min": {"type": "number"},
+            "max": {"type": "number"}
+          }
+        },
+        "trial_entry": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "confidence_band": {"type": "string"},
+            "risk_budget_pct": {"type": "number"}
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "regimes": {"type": "object"},
+    "symbols": {"type": "object"}
+  },
+  "additionalProperties": true
+}

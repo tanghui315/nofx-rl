@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TradeLabelEntry",
+  "type": "object",
+  "required": ["source_ts", "symbol", "horizon_min"],
+  "properties": {
+    "source_ts": {"type": "string", "format": "date-time"},
+    "symbol": {"type": "string"},
+    "horizon_min": {"type": "integer", "enum": [5, 15, 30, 60, 180]},
+    "directional_return": {"type": "number"},
+    "max_favorable_excursion": {"type": "number"},
+    "max_adverse_excursion": {"type": "number"},
+    "hit": {"type": "string", "enum": ["tp", "sl", "none"]},
+    "tick_id": {"type": "string"}
+  },
+  "additionalProperties": true
+}

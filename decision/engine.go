@@ -6,6 +6,7 @@ import (
 	"log"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/overrides"
 	"nofx/pool"
 	"os"
 	"regexp"
@@ -272,8 +273,17 @@ func buildSystemPromptWithCustom(accountEquity float64, btcEthLeverage, altcoinL
 		return customPrompt
 	}
 
-	// 获取基础prompt（使用指定的模板）
-	basePrompt := buildSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage, templateName)
+    // 获取基础prompt（使用指定的模板）
+    basePrompt := buildSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage, templateName)
+
+    // 尝试注入运行时覆盖头（不修改模板文件；TTL 过期自动失效）
+    if hdr, ok := overrides.BuildHeaderFromFile("config/policy_overrides.json"); ok && hdr != "" {
+        var sbHdr strings.Builder
+        sbHdr.WriteString(hdr)
+        sbHdr.WriteString("\n")
+        sbHdr.WriteString(basePrompt)
+        basePrompt = sbHdr.String()
+    }
 
 	// 如果没有自定义prompt，直接返回基础prompt
 	if customPrompt == "" {

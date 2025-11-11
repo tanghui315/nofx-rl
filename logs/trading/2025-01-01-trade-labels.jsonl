@@ -1,0 +1,1 @@
+{"source_ts": "2025-01-01T12:00:00Z", "symbol": "ETHUSDT", "horizon_min": 30, "directional_return": 0.0123, "max_favorable_excursion": 0.02, "max_adverse_excursion": -0.01, "hit": "none", "tick_id": "demo-1"}

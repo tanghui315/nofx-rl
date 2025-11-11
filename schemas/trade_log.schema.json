@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TradeLogEntry",
+  "type": "object",
+  "required": ["ts", "symbol", "reason", "features", "risk", "decision"],
+  "properties": {
+    "ts": {"type": "string", "format": "date-time"},
+    "symbol": {"type": "string"},
+    "reason": {"type": "string", "enum": ["decision_tick", "open", "reject"]},
+    "features": {
+      "type": "object",
+      "required": ["m15", "h1", "h4", "vol_z", "btc_state", "checklist_hits"],
+      "properties": {
+        "m15": {"type": "object"},
+        "h1": {"type": "object"},
+        "h4": {"type": "object"},
+        "vol_z": {"type": "number"},
+        "funding_pct": {"type": "number"},
+        "oi_chg_15m": {"type": "number"},
+        "btc_state": {"type": "object"},
+        "checklist_hits": {"type": "integer", "minimum": 0},
+        "fake_breakout_flags": {"type": "array"}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "properties": {
+        "cooldown": {"type": "boolean"},
+        "sharpe_band": {"type": "string"},
+        "loss_streak": {"type": "integer", "minimum": 0},
+        "margin_used_pct": {"type": "number"},
+        "positions": {"type": "integer", "minimum": 0}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": ["action", "confidence"],
+      "properties": {
+        "action": {"type": "string"},
+        "confidence": {"type": "number"},
+        "reasons": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "additionalProperties": true
+}
