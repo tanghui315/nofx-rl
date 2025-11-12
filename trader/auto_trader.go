@@ -9,8 +9,8 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
-	"nofx/pool"
 	"nofx/news"
+	"nofx/pool"
 	"strings"
 	"sync"
 	"time"
@@ -74,11 +74,11 @@ type AutoTraderConfig struct {
 	DefaultCoins []string // 默认币种列表（从数据库获取）
 	TradingCoins []string // 实际交易币种列表
 
-    // 系统提示词模板
-    SystemPromptTemplate string // 系统提示词模板名称（如 "default", "aggressive"）
+	// 系统提示词模板
+	SystemPromptTemplate string // 系统提示词模板名称（如 "default", "aggressive"）
 
-    // 是否在决策上下文中包含新闻
-    IncludeNews bool
+	// 是否在决策上下文中包含新闻
+	IncludeNews bool
 }
 
 // AutoTrader 自动交易器
@@ -245,7 +245,7 @@ func (at *AutoTrader) Run() error {
 	at.isRunning = true
 	at.stopMonitorCh = make(chan struct{})
 	at.startTime = time.Now()
-	
+
 	log.Println("🚀 AI驱动自动交易系统启动")
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
 	log.Printf("⚙️  扫描间隔: %v", at.config.ScanInterval)
@@ -299,35 +299,35 @@ func (at *AutoTrader) autoSyncBalanceIfNeeded() {
 
 	log.Printf("🔄 [%s] 开始自动检查余额变化...", at.name)
 
-    // 查询实际余额
-    balanceInfo, err := at.trader.GetBalance()
+	// 查询实际余额
+	balanceInfo, err := at.trader.GetBalance()
 	if err != nil {
 		log.Printf("⚠️ [%s] 查询余额失败: %v", at.name, err)
 		at.lastBalanceSyncTime = time.Now() // 即使失败也更新时间，避免频繁重试
 		return
 	}
 
-    // 提取净值（优先）：总净值 = 钱包余额 + 未实现盈亏
-    var actualBalance float64
-    if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
-        if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
-            actualBalance = wallet + unpnl
-        }
-    }
-    // 退化到 available/balance
-    if actualBalance <= 0 {
-        if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
-            actualBalance = availableBalance
-        } else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
-            actualBalance = availableBalance
-        } else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
-            actualBalance = totalBalance
-        } else {
-            log.Printf("⚠️ [%s] 无法提取账户净值/余额", at.name)
-            at.lastBalanceSyncTime = time.Now()
-            return
-        }
-    }
+	// 提取净值（优先）：总净值 = 钱包余额 + 未实现盈亏
+	var actualBalance float64
+	if wallet, ok := balanceInfo["totalWalletBalance"].(float64); ok {
+		if unpnl, ok2 := balanceInfo["totalUnrealizedProfit"].(float64); ok2 {
+			actualBalance = wallet + unpnl
+		}
+	}
+	// 退化到 available/balance
+	if actualBalance <= 0 {
+		if availableBalance, ok := balanceInfo["available_balance"].(float64); ok && availableBalance > 0 {
+			actualBalance = availableBalance
+		} else if availableBalance, ok := balanceInfo["availableBalance"].(float64); ok && availableBalance > 0 {
+			actualBalance = availableBalance
+		} else if totalBalance, ok := balanceInfo["balance"].(float64); ok && totalBalance > 0 {
+			actualBalance = totalBalance
+		} else {
+			log.Printf("⚠️ [%s] 无法提取账户净值/余额", at.name)
+			at.lastBalanceSyncTime = time.Now()
+			return
+		}
+	}
 
 	oldBalance := at.initialBalance
 
@@ -730,7 +730,9 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		symSet := make(map[string]bool)
 		var pick []string
 		for _, p := range positionInfos {
-			if len(pick) >= 2 { break }
+			if len(pick) >= 2 {
+				break
+			}
 			if !symSet[p.Symbol] {
 				pick = append(pick, p.Symbol)
 				symSet[p.Symbol] = true
@@ -1211,6 +1213,31 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	closeQuantity := totalQuantity * (decision.ClosePercentage / 100.0)
 	actionRecord.Quantity = closeQuantity
 
+	// ✅ Layer 2: 最小仓位检查（避免产生无法成交的小额剩余）
+	markPrice, ok := targetPosition["markPrice"].(float64)
+	if !ok || markPrice <= 0 {
+		return fmt.Errorf("无法解析当前价格，无法执行最小仓位检查")
+	}
+
+	currentPositionValue := totalQuantity * markPrice
+	remainingQuantity := totalQuantity - closeQuantity
+	remainingValue := remainingQuantity * markPrice
+
+	const MIN_POSITION_VALUE = 10.0 // 交易所最小名义价值底线
+	if remainingValue > 0 && remainingValue <= MIN_POSITION_VALUE {
+		log.Printf("⚠️ 检测到 partial_close 后剩余仓位 %.2f USDT ≤ %.0f USDT，自动改为全平",
+			remainingValue, MIN_POSITION_VALUE)
+		log.Printf("  → 当前仓位价值: %.2f USDT, 平仓 %.1f%%, 剩余: %.2f USDT",
+			currentPositionValue, decision.ClosePercentage, remainingValue)
+
+		if positionSide == "LONG" {
+			decision.Action = "close_long"
+			return at.executeCloseLongWithRecord(decision, actionRecord)
+		}
+		decision.Action = "close_short"
+		return at.executeCloseShortWithRecord(decision, actionRecord)
+	}
+
 	// 执行平仓
 	var order map[string]interface{}
 	if positionSide == "LONG" {
@@ -1228,9 +1255,27 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 		actionRecord.OrderID = orderID
 	}
 
-	remainingQuantity := totalQuantity - closeQuantity
 	log.Printf("  ✓ 部分平仓成功: 平仓 %.4f (%.1f%%), 剩余 %.4f",
 		closeQuantity, decision.ClosePercentage, remainingQuantity)
+
+	// ✅ 恢复剩余仓位的止损/止盈（部分平仓后交易所可能取消原保护单）
+	if decision.NewStopLoss > 0 {
+		log.Printf("  → 为剩余仓位 %.4f 恢复止损单: %.2f", remainingQuantity, decision.NewStopLoss)
+		if err := at.trader.SetStopLoss(decision.Symbol, positionSide, remainingQuantity, decision.NewStopLoss); err != nil {
+			log.Printf("  ⚠️ 恢复止损失败: %v（不影响平仓结果）", err)
+		}
+	}
+	if decision.NewTakeProfit > 0 {
+		log.Printf("  → 为剩余仓位 %.4f 恢复止盈单: %.2f", remainingQuantity, decision.NewTakeProfit)
+		if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, remainingQuantity, decision.NewTakeProfit); err != nil {
+			log.Printf("  ⚠️ 恢复止盈失败: %v（不影响平仓结果）", err)
+		}
+	}
+	if decision.NewStopLoss <= 0 && decision.NewTakeProfit <= 0 {
+		log.Printf("  ⚠️⚠️⚠️ 警告: 部分平仓后AI未提供新的止盈止损价格")
+		log.Printf("  → 剩余仓位 %.4f (价值 %.2f USDT) 目前没有止盈止损保护", remainingQuantity, remainingValue)
+		log.Printf("  → 建议: 在 partial_close 决策中包含 new_stop_loss 和 new_take_profit 字段")
+	}
 
 	return nil
 }
@@ -1277,7 +1322,7 @@ func (at *AutoTrader) GetSystemPromptTemplate() string {
 
 // GetDecisionLogger 获取决策日志记录器
 func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
-    return at.decisionLogger
+	return at.decisionLogger
 }
 
 // GetIncludeNews 是否在决策上下文中包含新闻
@@ -1285,24 +1330,26 @@ func (at *AutoTrader) GetIncludeNews() bool { return at.config.IncludeNews }
 
 // GetTakerFeeRate 获取交易员账户在当前交易所下的 symbol taker 费率（若底层实现支持）；否则返回0
 func (at *AutoTrader) GetTakerFeeRate(symbol string) float64 {
-    type feeProvider interface{ GetTakerFeeRate(symbol string) (float64, error) }
-    if fp, ok := at.trader.(feeProvider); ok && fp != nil {
-        if r, err := fp.GetTakerFeeRate(symbol); err == nil && r > 0 {
-            return r
-        }
-    }
-    return 0
+	type feeProvider interface {
+		GetTakerFeeRate(symbol string) (float64, error)
+	}
+	if fp, ok := at.trader.(feeProvider); ok && fp != nil {
+		if r, err := fp.GetTakerFeeRate(symbol); err == nil && r > 0 {
+			return r
+		}
+	}
+	return 0
 }
 
 // GetUserTrades 从底层交易器（若支持）拉取指定 symbol 的用户成交
 func (at *AutoTrader) GetUserTrades(symbol string, start, end time.Time, limit int) ([]StdUMTrade, error) {
-    type tradeProvider interface{
-        GetUserTrades(symbol string, start, end time.Time, limit int) ([]StdUMTrade, error)
-    }
-    if tp, ok := at.trader.(tradeProvider); ok && tp != nil {
-        return tp.GetUserTrades(symbol, start, end, limit)
-    }
-    return nil, fmt.Errorf("underlying trader does not support user trades")
+	type tradeProvider interface {
+		GetUserTrades(symbol string, start, end time.Time, limit int) ([]StdUMTrade, error)
+	}
+	if tp, ok := at.trader.(tradeProvider); ok && tp != nil {
+		return tp.GetUserTrades(symbol, start, end, limit)
+	}
+	return nil, fmt.Errorf("underlying trader does not support user trades")
 }
 
 // LogAnomalyAction 记录异常监控触发的紧急操作到决策日志（用于前端“最近决策”展示）
@@ -1603,12 +1650,12 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 	}
 
 	var result []map[string]interface{}
-    for _, pos := range positions {
-        symbol := pos["symbol"].(string)
-        side := pos["side"].(string)
-        entryPrice := pos["entryPrice"].(float64)
-        markPrice := pos["markPrice"].(float64)
-        quantity := pos["positionAmt"].(float64)
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		entryPrice := pos["entryPrice"].(float64)
+		markPrice := pos["markPrice"].(float64)
+		quantity := pos["positionAmt"].(float64)
 		if quantity < 0 {
 			quantity = -quantity
 		}
@@ -1626,31 +1673,31 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 		// 计算盈亏百分比（基于保证金）
 		pnlPct := calculatePnLPercentage(unrealizedPnl, marginUsed)
 
-        // 查询当前止盈/止损（如果交易所支持）
-        stopLoss := 0.0
-        takeProfit := 0.0
-        if at.trader != nil {
-            if sl, tp, err := at.trader.GetStopTakePrices(symbol, strings.ToUpper(side)); err == nil {
-                stopLoss = sl
-                takeProfit = tp
-            }
-        }
+		// 查询当前止盈/止损（如果交易所支持）
+		stopLoss := 0.0
+		takeProfit := 0.0
+		if at.trader != nil {
+			if sl, tp, err := at.trader.GetStopTakePrices(symbol, strings.ToUpper(side)); err == nil {
+				stopLoss = sl
+				takeProfit = tp
+			}
+		}
 
-        result = append(result, map[string]interface{}{
-            "symbol":             symbol,
-            "side":               side,
-            "entry_price":        entryPrice,
-            "mark_price":         markPrice,
-            "quantity":           quantity,
-            "leverage":           leverage,
-            "unrealized_pnl":     unrealizedPnl,
-            "unrealized_pnl_pct": pnlPct,
-            "liquidation_price":  liquidationPrice,
-            "margin_used":        marginUsed,
-            "stop_loss":          stopLoss,
-            "take_profit":        takeProfit,
-        })
-    }
+		result = append(result, map[string]interface{}{
+			"symbol":             symbol,
+			"side":               side,
+			"entry_price":        entryPrice,
+			"mark_price":         markPrice,
+			"quantity":           quantity,
+			"leverage":           leverage,
+			"unrealized_pnl":     unrealizedPnl,
+			"unrealized_pnl_pct": pnlPct,
+			"liquidation_price":  liquidationPrice,
+			"margin_used":        marginUsed,
+			"stop_loss":          stopLoss,
+			"take_profit":        takeProfit,
+		})
+	}
 
 	return result, nil
 }

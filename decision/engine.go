@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
@@ -388,9 +389,11 @@ func buildUserPrompt(ctx *Context) string {
 				}
 			}
 
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
+			// 显示数量与仓位价值，便于AI在 partial_close 前评估剩余价值门槛
+			positionValue := math.Abs(pos.Quantity) * pos.MarkPrice
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
 				i+1, pos.Symbol, strings.ToUpper(pos.Side),
-				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
+				pos.EntryPrice, pos.MarkPrice, pos.Quantity, positionValue, pos.UnrealizedPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
 
 			// 使用FormatMarketData输出完整市场数据
@@ -712,8 +715,8 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	// 开仓操作必须提供完整参数
 	if d.Action == "open_long" || d.Action == "open_short" {
 		// 根据币种使用配置的杠杆上限
-		maxLeverage := altcoinLeverage          // 山寨币使用配置的杠杆
-		maxPositionValue := accountEquity * 10  // 山寨币最多10倍账户净值（名义价值）
+		maxLeverage := altcoinLeverage         // 山寨币使用配置的杠杆
+		maxPositionValue := accountEquity * 10 // 山寨币最多10倍账户净值（名义价值）
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
 			maxLeverage = btcEthLeverage          // BTC和ETH使用配置的杠杆
 			maxPositionValue = accountEquity * 20 // BTC/ETH最多20倍账户净值（名义价值）
