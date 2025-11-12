@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -34,6 +35,12 @@ func Get(symbol string) (*Data, error) {
 	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m") // 多获取一些用于计算
 	if err != nil {
 		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
+	}
+
+	// 数据陈旧性检测：防止 DOGEUSDT 式价格冻结问题
+	if isStaleData(klines3m, symbol) {
+		log.Printf("⚠️  WARNING: %s detected stale data (consecutive price freeze), skipping symbol", symbol)
+		return nil, fmt.Errorf("%s data is stale, possible cache failure", symbol)
 	}
 
 	// 获取4小时K线数据 (最近10个)
@@ -836,4 +843,46 @@ func formatSingleDivergence(sb *strings.Builder, div *Divergence) {
 	sb.WriteString(fmt.Sprintf("- Description: %s\n", div.Description))
 	sb.WriteString(fmt.Sprintf("- Price Peaks: %d | Indicator Peaks: %d\n\n",
 		len(div.PricePeaks), len(div.IndicatorPeaks)))
+}
+
+// isStaleData 检测行情是否“陈旧”（连续价格冻结）
+// 规则：最近 5 根 3 分钟 K 线收盘价几乎不变（波动 <= 0.01%），且成交量为 0 → 视为陈旧
+// 若价格几乎不变但有成交量，视为极低波动市场：放行但打印警告
+func isStaleData(klines []Kline, symbol string) bool {
+	if len(klines) < 5 {
+		return false // 数据不足，无法判断
+	}
+
+	const stalePriceThreshold = 5    // 连续根数
+	const priceTolerancePct = 0.0001 // 0.01% 容忍度
+	recent := klines[len(klines)-stalePriceThreshold:]
+	base := recent[0].Close
+	if base <= 0 {
+		return false
+	}
+
+	// 检查最近 N 根价格是否都在容忍度内
+	for i := 1; i < len(recent); i++ {
+		diff := math.Abs(recent[i].Close-base) / base
+		if diff > priceTolerancePct {
+			return false // 存在正常波动
+		}
+	}
+
+	// 成交量全为 0 → 确认陈旧
+	allZero := true
+	for _, k := range recent {
+		if k.Volume > 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		log.Printf("⚠️  %s stale data confirmed: price freeze + zero volume", symbol)
+		return true
+	}
+
+	// 价格几乎不变但有成交量：极低波动，放行但告警
+	log.Printf("⚠️  %s detected extreme price stability (no fluctuation for %d consecutive periods), but volume is normal", symbol, stalePriceThreshold)
+	return false
 }
