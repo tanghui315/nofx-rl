@@ -16,6 +16,21 @@ import type {
 
 const API_BASE = '/api'
 
+// Helper: 处理 401 未授权（token 失效等）→ 清理本地登录状态并跳转登录页
+function handleUnauthorized() {
+  try {
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('auth_user')
+  } catch {
+    // ignore storage errors
+  }
+
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.history.pushState({}, '', '/login')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+}
+
 // Helper function to get auth headers
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem('auth_token')
@@ -36,6 +51,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/my-traders`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取trader列表失败')
     return res.json()
   },
@@ -46,6 +65,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/news?${params.toString()}`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取新闻缓存失败')
     return res.json()
   },
@@ -63,6 +86,10 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(request),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('创建交易员失败')
     return res.json()
   },
@@ -72,6 +99,10 @@ export const api = {
       method: 'DELETE',
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('删除交易员失败')
   },
 
@@ -80,6 +111,10 @@ export const api = {
       method: 'POST',
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('启动交易员失败')
   },
 
@@ -88,6 +123,10 @@ export const api = {
       method: 'POST',
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('停止交易员失败')
   },
 
@@ -100,6 +139,10 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify({ custom_prompt: customPrompt }),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('更新自定义策略失败')
   },
 
@@ -107,6 +150,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/traders/${traderId}/config`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取交易员配置失败')
     return res.json()
   },
@@ -120,6 +167,10 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(request),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('更新交易员失败')
     return res.json()
   },
@@ -129,6 +180,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/models`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取模型配置失败')
     return res.json()
   },
@@ -146,6 +201,10 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(request),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('更新模型配置失败')
   },
 
@@ -154,6 +213,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/exchanges`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取交易所配置失败')
     return res.json()
   },
@@ -173,6 +236,10 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(request),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('更新交易所配置失败')
   },
 
@@ -184,6 +251,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取系统状态失败')
     return res.json()
   },
@@ -200,6 +271,10 @@ export const api = {
         'Cache-Control': 'no-cache',
       },
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取账户信息失败')
     const data = await res.json()
     console.log('Account data fetched:', data)
@@ -214,6 +289,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取持仓列表失败')
     return res.json()
   },
@@ -237,14 +316,19 @@ export const api = {
         side,
         quantity: quantity || 0, // 0表示全部平仓
       }),
-    });
-    
-    if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || '平仓失败');
+    })
+
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
     }
-    
-    return res.json();
+
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.error || '平仓失败')
+    }
+
+    return res.json()
   },
 
   // 获取决策日志（支持trader_id）
@@ -255,6 +339,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取决策日志失败')
     return res.json()
   },
@@ -267,6 +355,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取最新决策失败')
     return res.json()
   },
@@ -279,6 +371,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取统计信息失败')
     return res.json()
   },
@@ -291,6 +387,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取历史数据失败')
     return res.json()
   },
@@ -305,6 +405,10 @@ export const api = {
       },
       body: JSON.stringify({ trader_ids: traderIds }),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取批量历史数据失败')
     return res.json()
   },
@@ -333,6 +437,10 @@ export const api = {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取AI学习数据失败')
     return res.json()
   },
@@ -342,6 +450,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/competition`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取竞赛数据失败')
     return res.json()
   },
@@ -354,6 +466,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/user/signal-sources`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取用户信号源配置失败')
     return res.json()
   },
@@ -370,6 +486,10 @@ export const api = {
         oi_top_url: oiTopUrl,
       }),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('保存用户信号源配置失败')
   },
 
@@ -381,6 +501,10 @@ export const api = {
     const res = await fetch(`${API_BASE}/server-ip`, {
       headers: getAuthHeaders(),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error('获取服务器IP失败')
     return res.json()
   },
@@ -394,6 +518,10 @@ export const api = {
       headers['Authorization'] = `Bearer ${token}`
     }
     const res = await fetch(`${API_BASE}${endpoint}`, { headers })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) throw new Error(`GET ${endpoint} failed`)
     return res.json()
   },
@@ -411,6 +539,10 @@ export const api = {
       headers,
       body: JSON.stringify(data),
     })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!res.ok) {
       const error = await res.json().catch(() => ({}))
       throw { response: { data: error } }
