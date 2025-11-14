@@ -698,7 +698,7 @@ export function TraderConfigModal({
                 />
                 <label className="text-sm text-[#EAECEF]">在LLM决策中包含最新新闻</label>
                 <span className="text-xs text-[#848E9C]">
-                  注入该币种最近3条新闻（需后端已配置Tavily密钥）
+                  注入该币种最近3条新闻（需后端已配置 Telegram 新闻源）
                 </span>
               </div>
               <div>

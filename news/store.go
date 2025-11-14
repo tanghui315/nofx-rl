@@ -7,6 +7,17 @@ import (
     "time"
 )
 
+// Item 表示一条新闻记录（标题、链接、来源、发布时间、摘要）
+// 这是系统内部统一使用的基础新闻结构，具体数据源（Tavily、Telegram 等）
+// 只需要填充这些字段即可被后续存储与消费。
+type Item struct {
+    Title       string    `json:"title"`
+    URL         string    `json:"url"`
+    Source      string    `json:"source"`
+    PublishedAt time.Time `json:"published_at"`
+    Summary     string    `json:"summary"`
+}
+
 // DB is the minimal database contract used by the news package.
 type DB interface {
     InsertNews(symbol, title, url, source string, publishedAt time.Time, summary string, fetchedAt time.Time) error

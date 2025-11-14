@@ -22,6 +22,25 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// NewsSourceConfig 新闻源配置（目前主要支持 Telegram）
+type NewsSourceConfig struct {
+    Provider string                  `json:"provider"`          // 例如 "telegram"
+    Telegram *TelegramNewsConfig     `json:"telegram,omitempty"` // Telegram 客户端配置
+    Channels []TelegramNewsChannel   `json:"channels,omitempty"` // 频道列表
+}
+
+// TelegramNewsConfig Telegram 抓取配置
+type TelegramNewsConfig struct {
+    BaseURL  string `json:"baseurl"`  // 基础 URL，默认 https://t.me/s
+    ProxyURL string `json:"proxyurl"` // 代理 URL，可选
+}
+
+// TelegramNewsChannel 单个 Telegram 频道配置
+type TelegramNewsChannel struct {
+    ID   string `json:"id"`   // 频道 ID（如 t.me/ChannelPANews 中的 ChannelPANews）
+    Name string `json:"name"` // 频道名称（仅用于日志/展示）
+}
+
 // ConfigFile 配置文件结构，只包含需要同步到数据库的字段
 // TODO 现在与config.Config相同，未来会被替换， 现在为了兼容性不得不保留当前文件
 type ConfigFile struct {
@@ -43,6 +62,7 @@ type ConfigFile struct {
     HTTPProxy          string                `json:"http_proxy"`
     HTTPSProxy         string                `json:"https_proxy"`
     NoProxy            string                `json:"no_proxy"`
+    News               []NewsSourceConfig    `json:"news"` // 新闻源配置（可选）
 }
 
 // loadConfigFile 读取并解析config.json文件
@@ -360,9 +380,57 @@ func main() {
 
     // 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
     wsMonitor := market.NewWSMonitor(150)
-    // 启动新闻抓取后台任务（若配置了Tavily API Key）
+
+    // 启动新闻抓取后台任务（基于 Telegram 频道）
     news.SetDatabase(database)
-    news.StartWorker(database)
+    {
+        // 从 config.json 中解析新闻配置（仅支持 provider == "telegram"）
+        var tgBaseURL string
+        var tgProxyURL string
+        var tgChannels []string
+
+        if configFile != nil {
+            for _, ns := range configFile.News {
+                if strings.ToLower(strings.TrimSpace(ns.Provider)) != "telegram" {
+                    continue
+                }
+                if ns.Telegram != nil {
+                    if ns.Telegram.BaseURL != "" {
+                        tgBaseURL = ns.Telegram.BaseURL
+                    }
+                    if ns.Telegram.ProxyURL != "" {
+                        tgProxyURL = ns.Telegram.ProxyURL
+                    }
+                }
+                for _, ch := range ns.Channels {
+                    id := strings.TrimSpace(ch.ID)
+                    if id != "" {
+                        tgChannels = append(tgChannels, id)
+                    }
+                }
+            }
+        }
+
+        // 若 config.json 中未配置频道，可选地从环境变量回退（兼容旧部署）
+        if len(tgChannels) == 0 {
+            if chEnv := os.Getenv("TELEGRAM_NEWS_CHANNELS"); strings.TrimSpace(chEnv) != "" {
+                parts := strings.Split(chEnv, ",")
+                for _, p := range parts {
+                    id := strings.TrimSpace(p)
+                    if id != "" {
+                        tgChannels = append(tgChannels, id)
+                    }
+                }
+            }
+        }
+
+        if len(tgChannels) > 0 {
+            log.Printf("✓ 配置 Telegram 新闻源频道: %v", tgChannels)
+            news.StartWorker(database, tgBaseURL, tgProxyURL, tgChannels)
+        } else {
+            log.Printf("💡 未配置 Telegram 新闻频道，新闻抓取 Worker 未启动")
+        }
+    }
 	
 	// 加载并启用异常监控配置
 	anomalyConfig, err := config.LoadAnomalyConfig(database)

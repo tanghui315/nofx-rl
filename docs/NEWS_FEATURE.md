@@ -1,25 +1,27 @@
-# 新闻功能（Tavily 新闻抓取）使用说明
+# 新闻功能（Telegram 新闻抓取）使用说明
 
-本文档介绍如何在系统中开启并使用“新闻抓取 + 决策注入”能力，以便在 LLM 决策时参考币种的最新资讯。
+本文档介绍如何在系统中开启并使用“新闻抓取 + 决策注入”能力，以便在 LLM 决策时参考币种的最新资讯（目前基于 Telegram 频道，而非 Tavily API）。
 
 ## 功能概览
-- 后端在服务启动时检测环境变量 `TAVILY_API_KEY`，若存在即启动新闻抓取 Worker。
-- Worker 每隔固定时间（默认 15 分钟）对系统默认币种（`default_coins`）抓取相关新闻并缓存到本地数据库（`config.db`）。
+- 后端在服务启动时检测环境变量 `TELEGRAM_NEWS_CHANNELS`，若存在即启动新闻抓取 Worker。
+- Worker 每隔固定时间（默认 15 分钟）从配置的 Telegram 频道抓取最新消息，并按系统默认币种（`default_coins`）缓存到本地数据库（`config.db`）。
 - 每个币种仅保留最近若干条（默认 5 条，按发布时间/抓取时间倒序）。
 - 交易员层面可单独开启“包含新闻”开关，开启后在 LLM 决策上下文中注入该币种的最近 3 条新闻（标题/来源/链接/时间），提升对事件驱动行情的响应能力。
 - 前端在“AI 交易员”页面提供“📰 新闻缓存”调试面板，可按币种查看已缓存的新闻。
 
 ## 开启步骤
-1. 准备 Tavily API Key（注册 Tavily 后获得）。
+1. 选择你希望作为新闻源的 Telegram 频道列表，例如：
+   - `ChannelPANews`（PANews）
+   - `Binance_Announcements`（币安公告）
 2. 在项目根目录 `.env` 或系统环境中设置：
-   - `TAVILY_API_KEY=tvly-xxxxxxx`
+   - `TELEGRAM_NEWS_CHANNELS=ChannelPANews,Binance_Announcements`
+   - （可选）`TELEGRAM_PROXY_URL=http://127.0.0.1:18080`（国内访问 Telegram 建议配置）
+   - （可选）`TELEGRAM_BASE_URL=https://t.me/s`（默认即可）
 3. 启动/重启服务：
    - `go run -tags dev main.go`
 4. 观察日志：
-   - 若看到 `💡 News worker disabled: TAVILY_API_KEY missing`，表示未设置密钥，Worker 未启动。
-   - 设置密钥后重启，首轮抓取完成后会打印各币种抓取/保存日志。
-
-提示：模板文件 `.env.example` 已包含 `TAVILY_API_KEY` 占位，可参考复制为 `.env`。
+   - 若看到 `💡 News worker disabled: TELEGRAM_NEWS_CHANNELS missing`，表示未配置频道，Worker 未启动。
+   - 配置频道后重启，首轮抓取完成后会打印各币种抓取/保存日志。
 
 ## 配置项与默认值
 - 抓取间隔：`news_interval_minutes`（系统配置，默认 15）
@@ -70,16 +72,15 @@
   - 超限清理：每个 `symbol` 超过保留阈值会自动按时间淘汰旧记录
 
 ## 抓取策略（当前实现）
-- 请求：`POST https://api.tavily.com/search`
-- 查询参数（精简）：
-  - query: `"<SYMBOL> crypto news"`
-  - include_domains: `coindesk.com, cointelegraph.com, decrypt.co, theblock.co, ambcrypto.com`（可后续扩展）
-  - time_range: `d7`（近 7 天）
-  - max_results: `10`
+- 请求：`GET https://t.me/s/<channel>`（可通过 `TELEGRAM_PROXY_URL` 使用代理）
+- 解析：使用 `goquery` 从 HTML 中提取最近若干条消息：
+  - 标题：消息文本首行
+  - 摘要：后续行合并
+  - 时间：`<time datetime="...">`（若解析失败则使用抓取时间）
 
 ## 常见问题（FAQ）
-1) 日志显示“News worker disabled: TAVILY_API_KEY missing”
-   - 未设置 `TAVILY_API_KEY`；在 `.env` 或环境变量设置后重启。
+1) 日志显示“News worker disabled: TELEGRAM_NEWS_CHANNELS missing”
+   - 未设置 `TELEGRAM_NEWS_CHANNELS`；在 `.env` 或环境变量设置后重启。
 
 2) `/api/news` 返回空数组
    - 刚启动还未到抓取周期；等待首轮抓取（启动后会先执行一次），或检查网络与密钥有效性。
@@ -95,8 +96,7 @@
 
 ## 最佳实践与注意事项
 - 建议只对与策略相关的交易员开启“包含新闻”，降低 Token 与上下文噪音。
-- 若观察到 Tavily 频率/配额限制，可适当提高 `news_interval_minutes`。
+- 若观察到 Telegram 抓取不稳定或被限频，可适当提高 `news_interval_minutes`，并合理配置代理。
 - 默认仅保留新闻标题/链接/来源/时间；如需将摘要纳入上下文，请评估 Token 成本后再开启。
 
 —— 以上为当前阶段的最小实现文档。后续如需：可配置注入条数、域名白名单编辑、并发抓取与重试策略等，可在 openspec 中提出变更提案迭代。
-

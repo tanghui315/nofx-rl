@@ -3,6 +3,7 @@ module nofx
 go 1.25.0
 
 require (
+	github.com/PuerkitoBio/goquery v1.9.2
 	github.com/adshao/go-binance/v2 v2.8.7
 	github.com/ethereum/go-ethereum v1.16.5
 	github.com/gin-gonic/gin v1.11.0
@@ -19,6 +20,7 @@ require (
 )
 
 require (
+	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/armon/go-radix v1.0.0 // indirect
 	github.com/bitly/go-simplejson v0.5.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.0 // indirect

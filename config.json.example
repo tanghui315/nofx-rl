@@ -24,7 +24,22 @@
   "log": {
     "level": "info"
   },
-  "http_proxy": "",
-  "https_proxy": "",
-  "no_proxy": "localhost,127.0.0.1"
+  "http_proxy": "http://127.0.0.1:1087",
+  "https_proxy": "http://127.0.0.1:1087",
+  "no_proxy": "localhost,127.0.0.1",
+  "news": [
+    {
+      "provider": "telegram",
+      "telegram": {
+        "baseurl": "https://t.me/s",
+        "proxyurl": "http://127.0.0.1:1087"
+      },
+      "channels": [
+        {
+          "id": "ChannelPANews",
+          "name": "PANews"
+        }
+      ]
+    }
+  ]
 }
