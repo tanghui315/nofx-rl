@@ -101,7 +101,7 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 		record.Timestamp.Format("20060102_150405"),
 		record.CycleNumber)
 
-	filepath := filepath.Join(l.logDir, filename)
+	logPath := filepath.Join(l.logDir, filename)
 
 	// 序列化为JSON（带缩进，方便阅读）
 	data, err := json.MarshalIndent(record, "", "  ")
@@ -110,8 +110,48 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 	}
 
 	// 写入文件
-	if err := ioutil.WriteFile(filepath, data, 0644); err != nil {
+	if err := ioutil.WriteFile(logPath, data, 0644); err != nil {
 		return fmt.Errorf("写入决策记录失败: %w", err)
+	}
+
+	// 若来源为异常监控，则额外写入汇总日志（便于运维排查）
+	if record.Source == "anomaly" {
+		// 推测 trader ID = 日志目录的最后一段（决策日志通常位于 decision_logs/<traderID>）
+		traderID := filepath.Base(l.logDir)
+		symbol := ""
+		action := ""
+		price := 0.0
+		success := record.Success
+		if len(record.Decisions) > 0 {
+			dec := record.Decisions[0]
+			symbol = dec.Symbol
+			action = dec.Action
+			price = dec.Price
+			// 若单条动作失败，则认为本次异常处理失败
+			if !dec.Success {
+				success = false
+			}
+		}
+
+		line := fmt.Sprintf(
+			"%s | trader=%s | symbol=%s | action=%s | price=%.8f | success=%v | error=%s\n",
+			record.Timestamp.Format("2006-01-02 15:04:05"),
+			traderID,
+			symbol,
+			action,
+			price,
+			success,
+			record.ErrorMessage,
+		)
+
+		// anomaly.log 放在决策日志目录的上一级（例如 decision_logs/anomaly.log）
+		anomalyPath := filepath.Join(filepath.Dir(l.logDir), "anomaly.log")
+		if f, err := os.OpenFile(anomalyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			_, _ = f.WriteString(line)
+			_ = f.Close()
+		} else {
+			fmt.Printf("⚠ 写入异常日志失败: %v\n", err)
+		}
 	}
 
 	fmt.Printf("📝 决策记录已保存: %s\n", filename)
