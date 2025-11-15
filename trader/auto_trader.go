@@ -1,15 +1,17 @@
 package trader
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"math"
+    "encoding/json"
+    "fmt"
+    "log"
+    "math"
+    "strconv"
 	"nofx/decision"
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/news"
+	"os"
 	"nofx/pool"
 	"strings"
 	"sync"
@@ -695,13 +697,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 
 	// 5. 分析历史表现（最近100个周期，避免长期持仓的交易记录丢失）
-	// 假设每3分钟一个周期，100个周期 = 5小时，足够覆盖大部分交易
-	performance, err := at.decisionLogger.AnalyzePerformance(100)
-	if err != nil {
-		log.Printf("⚠️  分析历史表现失败: %v", err)
-		// 不影响主流程，继续执行（但设置performance为nil以避免传递错误数据）
-		performance = nil
-	}
+	// 优先使用“交易所成交对账”，失败则回退日志口径，窗口默认500以稳定统计
+	performance := at.analyzePerformanceForContext(500)
 
 	// 6. 构建上下文
 	ctx := &decision.Context{
@@ -759,6 +756,237 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 
 	return ctx, nil
+}
+
+// analyzePerformanceForContext 统一“AI学习与反思”的口径：优先交易所成交，其次日志回退
+func (at *AutoTrader) analyzePerformanceForContext(lookback int) interface{} {
+	// 限制窗口，避免性能问题
+	if lookback <= 0 || lookback > 1000 {
+		lookback = 500
+	}
+
+	// 采集决策日志窗口，确定时间范围与涉及的symbols
+	records, _ := at.decisionLogger.GetLatestRecords(lookback)
+	var startTime, endTime time.Time
+	symSet := map[string]struct{}{}
+	if len(records) > 0 {
+		startTime = records[0].Timestamp
+		endTime = records[len(records)-1].Timestamp
+		for _, r := range records {
+			for _, d := range r.Decisions {
+				if d.Symbol != "" {
+					symSet[strings.ToUpper(d.Symbol)] = struct{}{}
+				}
+			}
+		}
+	} else {
+		// 没有记录：估一个时间窗（lookback*3分钟）
+		endTime = time.Now()
+		startTime = endTime.Add(-time.Duration(lookback*3) * time.Minute)
+	}
+	var symbols []string
+	for s := range symSet {
+		symbols = append(symbols, s)
+	}
+
+	// 费率解析：优先底层，次之环境变量，最后默认
+	exchange := at.exchange
+	resolver := func(symbol string) float64 {
+		if r := at.GetTakerFeeRate(symbol); r > 0 {
+			return r
+		}
+		key := "NOFX_TAKER_FEE_RATE_" + strings.ToUpper(exchange)
+		if v := os.Getenv(key); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+				return f
+			}
+		}
+		if v := os.Getenv("NOFX_TAKER_FEE_RATE"); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 0.01 {
+				return f
+			}
+		}
+		switch strings.ToLower(exchange) {
+		case "binance":
+			return 0.0004
+		case "hyperliquid", "aster":
+			return 0.0005
+		default:
+			return 0.0004
+		}
+	}
+
+	// 交易所优先：聚合 userTrades → PerformanceAnalysis
+	exchangeAnalysis := func() (*logger.PerformanceAnalysis, error) {
+		if len(symbols) == 0 {
+			return nil, fmt.Errorf("no symbols from decisions")
+		}
+		priceCache := map[string]float64{}
+		priceOf := func(asset string) (float64, error) {
+			a := strings.ToUpper(strings.TrimSpace(asset))
+			if a == "" || a == "USDT" {
+				return 1, nil
+			}
+			if v, ok := priceCache[a]; ok {
+				return v, nil
+			}
+			data, err := market.Get(a + "USDT")
+			if err != nil {
+				return 0, err
+			}
+			priceCache[a] = data.CurrentPrice
+			return data.CurrentPrice, nil
+		}
+
+		type key struct{ sym, side string }
+		grouped := map[key][]StdUMTrade{}
+		for _, sym := range symbols {
+			trs, err := at.GetUserTrades(sym, startTime, endTime, 1000)
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range trs {
+				k := key{strings.ToUpper(t.Symbol), strings.ToUpper(t.PositionSide)}
+				grouped[k] = append(grouped[k], t)
+			}
+		}
+
+		analysis := &logger.PerformanceAnalysis{
+			RecentTrades: []logger.TradeOutcome{},
+			SymbolStats:  map[string]*logger.SymbolPerformance{},
+		}
+
+		for k, list := range grouped {
+			// 简单 FIFO 聚合：按方向聚合成开/平周期
+			var qty, entryQty, realized, feeUSDT float64
+			var openPrice float64
+			var openTime time.Time
+
+			for _, tr := range list {
+				// 累计费用（转换为USDT）
+				comm := tr.Commission
+				if tr.CommissionAsset != "" && strings.ToUpper(tr.CommissionAsset) != "USDT" {
+					if px, err := priceOf(tr.CommissionAsset); err == nil && px > 0 {
+						comm *= px
+					}
+				}
+				feeUSDT += comm
+				realized += tr.RealizedPnl
+
+				// BUY 增加仓位，SELL 减少仓位（方向使用 PositionSide 区分，简化为数量聚合）
+				if strings.ToUpper(tr.Side) == "BUY" {
+					if qty <= 0 {
+						openPrice = tr.Price
+						openTime = tr.Time
+					}
+					qty += tr.Qty
+					entryQty += tr.Qty
+				} else {
+					qty -= tr.Qty
+				}
+
+				// 成为闭环（数量归零或反向穿越）
+				if qty <= 1e-12 && entryQty > 0 {
+					positionValue := openPrice * entryQty
+					outcome := logger.TradeOutcome{
+						Symbol:        k.sym,
+						Side:          strings.ToLower(k.side),
+						Quantity:      entryQty,
+						Leverage:      0,
+						OpenPrice:     openPrice,
+						ClosePrice:    tr.Price,
+						PositionValue: positionValue,
+						MarginUsed:    0,
+						PnL:           realized - feeUSDT,
+						PnLPct:        0,
+						Duration:      tr.Time.Sub(openTime).String(),
+						OpenTime:      openTime,
+						CloseTime:     tr.Time,
+						WasStopLoss:   false,
+					}
+					analysis.RecentTrades = append(analysis.RecentTrades, outcome)
+					analysis.TotalTrades++
+					if outcome.PnL > 0 {
+						analysis.WinningTrades++
+						analysis.AvgWin += outcome.PnL
+					} else if outcome.PnL < 0 {
+						analysis.LosingTrades++
+						analysis.AvgLoss += outcome.PnL
+					}
+					if _, ok := analysis.SymbolStats[k.sym]; !ok {
+						analysis.SymbolStats[k.sym] = &logger.SymbolPerformance{Symbol: k.sym}
+					}
+					st := analysis.SymbolStats[k.sym]
+					st.TotalTrades++
+					st.TotalPnL += outcome.PnL
+					if outcome.PnL > 0 {
+						st.WinningTrades++
+					} else if outcome.PnL < 0 {
+						st.LosingTrades++
+					}
+					// 重置
+					qty, entryQty, realized, feeUSDT = 0, 0, 0, 0
+					openPrice, openTime = 0, time.Time{}
+				}
+			}
+		}
+		// 汇总指标
+		if analysis.TotalTrades > 0 {
+			analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
+			tw := analysis.AvgWin
+			tl := analysis.AvgLoss
+			if analysis.WinningTrades > 0 {
+				analysis.AvgWin /= float64(analysis.WinningTrades)
+			}
+			if analysis.LosingTrades > 0 {
+				analysis.AvgLoss /= float64(analysis.LosingTrades)
+			}
+			if tl != 0 {
+				analysis.ProfitFactor = tw / (-tl)
+			} else if tw > 0 {
+				analysis.ProfitFactor = 999.0
+			}
+		}
+		best, worst := -1e12, 1e12
+		for sym, st := range analysis.SymbolStats {
+			if st.TotalTrades > 0 {
+				st.WinRate = (float64(st.WinningTrades) / float64(st.TotalTrades)) * 100
+				st.AvgPnL = st.TotalPnL / float64(st.TotalTrades)
+				if st.TotalPnL > best {
+					best = st.TotalPnL
+					analysis.BestSymbol = sym
+				}
+				if st.TotalPnL < worst {
+					worst = st.TotalPnL
+					analysis.WorstSymbol = sym
+				}
+			}
+		}
+		// 倒序保留最近10条
+		if n := len(analysis.RecentTrades); n > 1 {
+			for i, j := 0, n-1; i < j; i, j = i+1, j-1 {
+				analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
+			}
+		}
+		if len(analysis.RecentTrades) > 10 {
+			analysis.RecentTrades = analysis.RecentTrades[:10]
+		}
+		// 夏普比率基于净值记录（与前端一致）
+		analysis.SharpeRatio = at.decisionLogger.CalculateSharpeForWindow(records)
+		return analysis, nil
+	}
+
+	if ex, err := exchangeAnalysis(); err == nil && ex != nil && ex.TotalTrades > 0 {
+		return ex
+	}
+
+	// 回退：日志口径 + 费率解析器
+	perf, err := at.decisionLogger.AnalyzePerformanceWithFee(lookback, resolver)
+	if err != nil {
+		log.Printf("⚠️  日志口径表现分析失败: %v", err)
+		return nil
+	}
+	return perf
 }
 
 // executeDecisionWithRecord 执行AI决策并记录详细信息
@@ -1240,10 +1468,26 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 
 	// 执行平仓
 	var order map[string]interface{}
+	// 先进行数量步长校验：若格式化后为0，则回退为“全平”，避免交易所 -4003 错误
+	formattedQtyStr, fmtErr := at.trader.FormatQuantity(decision.Symbol, closeQuantity)
+	if fmtErr != nil {
+		return fmt.Errorf("部分平仓失败（数量格式化失败）: %w", fmtErr)
+	}
+	formattedQty, _ := strconv.ParseFloat(formattedQtyStr, 64)
+	if formattedQty <= 0 {
+		log.Printf("⚠️ partial_close 数量 %.8f 低于 LOT_SIZE 步长，自动回退为全平以避免下单失败", closeQuantity)
+		if positionSide == "LONG" {
+			decision.Action = "close_long"
+			return at.executeCloseLongWithRecord(decision, actionRecord)
+		}
+		decision.Action = "close_short"
+		return at.executeCloseShortWithRecord(decision, actionRecord)
+	}
+
 	if positionSide == "LONG" {
-		order, err = at.trader.CloseLong(decision.Symbol, closeQuantity)
+		order, err = at.trader.CloseLong(decision.Symbol, formattedQty)
 	} else {
-		order, err = at.trader.CloseShort(decision.Symbol, closeQuantity)
+		order, err = at.trader.CloseShort(decision.Symbol, formattedQty)
 	}
 
 	if err != nil {

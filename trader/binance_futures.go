@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"log"
 	"net/http"
 	"strconv"
@@ -951,10 +952,39 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 	return nil
 }
 
-// GetMinNotional 获取最小名义价值（Binance要求）
+// GetMinNotional 获取最小名义价值（从交易规则查询，失败时回退到保守默认值）
 func (t *FuturesTrader) GetMinNotional(symbol string) float64 {
-	// 使用保守的默认值 10 USDT，确保订单能够通过交易所验证
-	return 10.0
+	// 回退默认值（多数山寨的常见门槛），BTC/ETH 通常更高（如 100）
+	defaultMin := 10.0
+	exInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	if err != nil {
+		return defaultMin
+	}
+	for _, s := range exInfo.Symbols {
+		if s.Symbol != symbol {
+			continue
+		}
+		for _, filter := range s.Filters {
+			ft, _ := filter["filterType"].(string)
+			// 不同账户/接口可能返回 NOTIONAL 或 MIN_NOTIONAL
+			if ft == "NOTIONAL" || ft == "MIN_NOTIONAL" {
+				// 优先 minNotional，其次 notional
+				if v, ok := filter["minNotional"].(string); ok {
+					if x, err := strconv.ParseFloat(v, 64); err == nil && x > 0 {
+						return x
+					}
+				}
+				if v, ok := filter["notional"].(string); ok {
+					if x, err := strconv.ParseFloat(v, 64); err == nil && x > 0 {
+						return x
+					}
+				}
+			}
+		}
+		// 找到 symbol 但没有 NOTIONAL 过滤器，返回默认
+		return defaultMin
+	}
+	return defaultMin
 }
 
 // CheckMinNotional 检查订单是否满足最小名义价值要求
@@ -1047,14 +1077,64 @@ func trimTrailingZeros(s string) string {
 
 // FormatQuantity 格式化数量到正确的精度
 func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
-	precision, err := t.GetSymbolPrecision(symbol)
-	if err != nil {
-		// 如果获取失败，使用默认格式
-		return fmt.Sprintf("%.3f", quantity), nil
+	// 优先使用 LOT_SIZE 的 stepSize 进行取整，确保数量是步长的整数倍（向下取整）
+	stepSize := 0.0
+	precision := 3
+
+	// 尝试从交易规则获取 stepSize 和精度
+	if exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background()); err == nil {
+		for _, s := range exchangeInfo.Symbols {
+			if s.Symbol == symbol {
+				// 优先 MARKET_LOT_SIZE（市价单适用）；无则回退 LOT_SIZE
+				for _, filter := range s.Filters {
+					if filter["filterType"] == "MARKET_LOT_SIZE" {
+						if ss, ok := filter["stepSize"].(string); ok {
+							if v, err := strconv.ParseFloat(ss, 64); err == nil && v > 0 {
+								stepSize = v
+								precision = calculatePrecision(ss)
+							}
+						}
+						break
+					}
+				}
+				if stepSize <= 0 {
+					for _, filter := range s.Filters {
+						if filter["filterType"] == "LOT_SIZE" {
+							if ss, ok := filter["stepSize"].(string); ok {
+								if v, err := strconv.ParseFloat(ss, 64); err == nil && v > 0 {
+									stepSize = v
+									precision = calculatePrecision(ss)
+								}
+							}
+							break
+						}
+					}
+				}
+				break
+			}
+		}
 	}
 
-	format := fmt.Sprintf("%%.%df", precision)
-	return fmt.Sprintf(format, quantity), nil
+	// 如果拿不到 stepSize，则回退仅按小数位格式化（兼容旧逻辑）
+	if stepSize <= 0 {
+		p, err := t.GetSymbolPrecision(symbol)
+		if err != nil {
+			return fmt.Sprintf("%.3f", quantity), nil
+		}
+		precision = p
+		format := fmt.Sprintf("%%.%df", precision)
+		return fmt.Sprintf(format, quantity), nil
+	}
+
+	// 使用 LOT_SIZE 步长向下取整
+	steps := math.Floor(quantity/stepSize + 1e-12) // 加微量避免浮点误差导致的边界问题
+	rounded := steps * stepSize
+	if rounded <= 0 {
+		// 返回合法的0字符串，但上层应当拦截避免下单；这样明确暴露“低于步长”的问题
+		return fmt.Sprintf("%.*f", precision, 0.0), nil
+	}
+
+	return fmt.Sprintf("%.*f", precision, rounded), nil
 }
 
 // 辅助函数
