@@ -15,6 +15,9 @@ type Data struct {
 	FundingRate       float64
 	IntradaySeries    *IntradayData
 	LongerTermContext *LongerTermData
+	// 交易所规则（步长/最小名义），仅供提示词参考
+	// 实际下单风控在执行层强制校验
+	Rules *ExchangeRules
 
 	// 新增技术指标
 	BollingerBands *BollingerBands // 布林带
@@ -75,6 +78,14 @@ type SymbolInfo struct {
 	ContractType      string `json:"contractType"`
 	PricePrecision    int    `json:"pricePrecision"`
 	QuantityPrecision int    `json:"quantityPrecision"`
+	Filters           []map[string]interface{} `json:"filters,omitempty"`
+}
+
+// ExchangeRules 交易所规则（精简，注入给LLM作参考）
+type ExchangeRules struct {
+	StepSizeMarket float64 // MARKET_LOT_SIZE.stepSize（若提供）
+	StepSizeLot    float64 // LOT_SIZE.stepSize
+	MinNotional    float64 // NOTIONAL/MIN_NOTIONAL.notional/minNotional
 }
 
 // BollingerBands 布林带指标

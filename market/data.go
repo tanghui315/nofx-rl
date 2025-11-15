@@ -143,8 +143,14 @@ func Get(symbol string) (*Data, error) {
 	// 生成语义化分析
 	data.Semantics = AnalyzeSemantics(data)
 
+	// 注入交易所规则（步长/最小名义），供提示词参考
+	if rules, err := GetSymbolExchangeRules(symbol); err == nil {
+		data.Rules = rules
+	}
+
 	return data, nil
 }
+
 
 // calculateEMA 计算EMA
 func calculateEMA(klines []Kline, period int) float64 {
@@ -519,6 +525,21 @@ func Format(data *Data) string {
 	// OBV
 	if data.OBV != 0 {
 		sb.WriteString(fmt.Sprintf("**On-Balance Volume (OBV):** %.0f\n\n", data.OBV))
+	}
+
+	// Exchange Rules（步长/最小名义）—— 给 LLM 的参考（最终由执行层强校验）
+	if rules, err := GetSymbolExchangeRules(data.Symbol); err == nil && (rules.StepSizeMarket > 0 || rules.StepSizeLot > 0 || rules.MinNotional > 0) {
+		sb.WriteString("**Exchange Rules (Binance Futures):**\n")
+		if rules.StepSizeMarket > 0 {
+			sb.WriteString(fmt.Sprintf("- MARKET_LOT_SIZE step: %s\n", formatPriceWithDynamicPrecision(rules.StepSizeMarket)))
+		}
+		if rules.StepSizeLot > 0 {
+			sb.WriteString(fmt.Sprintf("- LOT_SIZE step: %s\n", formatPriceWithDynamicPrecision(rules.StepSizeLot)))
+		}
+		if rules.MinNotional > 0 {
+			sb.WriteString(fmt.Sprintf("- MIN_NOTIONAL: %s USDT\n", formatPriceWithDynamicPrecision(rules.MinNotional)))
+		}
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString(fmt.Sprintf("**Open Interest & Funding Rate (%s):**\n", data.Symbol))

@@ -1018,6 +1018,60 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📈 开多仓: %s", decision.Symbol)
 
+	// 预检：最小止损距离与入场结构（可配置）
+	marketData, err := market.Get(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	entryRefPrice := marketData.CurrentPrice
+	if entryRefPrice <= 0 {
+		return fmt.Errorf("无法获取当前价格")
+	}
+	// 3m ATR 百分比
+	atrPct := 0.0
+	if md := marketData.IntradaySeries; md != nil && md.ATR14 > 0 && entryRefPrice > 0 {
+		atrPct = (md.ATR14 / entryRefPrice) * 100.0
+	}
+	// 最小止损距离：max(基线%, ATR系数×ATR%)
+	enforceMinSL := os.Getenv("NOFX_ENFORCE_MIN_SL")
+	if enforceMinSL == "" || enforceMinSL == "1" || strings.ToLower(enforceMinSL) == "true" {
+		basePct := 1.0
+		if v := os.Getenv("NOFX_MIN_SL_PCT_BASE"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+				basePct = f
+			}
+		}
+		atrMult := 0.8
+		if v := os.Getenv("NOFX_MIN_SL_ATR_MULT"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f >= 0 {
+				atrMult = f
+			}
+		}
+		minSlPct := math.Max(basePct, atrPct*atrMult)
+		if decision.StopLoss > 0 {
+			riskPct := (entryRefPrice - decision.StopLoss) / entryRefPrice * 100.0
+			if riskPct < minSlPct {
+				return fmt.Errorf("止损过近: %.2f%% < 最小要求 %.2f%%（基于3m ATR与基线）", riskPct, minSlPct)
+			}
+		}
+	}
+	// 可选：入场需贴近3m EMA20（软约束，默认关闭）
+	if v := os.Getenv("NOFX_NEAR_EMA20_ENABLED"); strings.ToLower(v) == "true" || v == "1" {
+		thr := 0.4
+		if t := os.Getenv("NOFX_NEAR_EMA20_PCT"); t != "" {
+			if f, e := strconv.ParseFloat(t, 64); e == nil && f > 0 {
+				thr = f
+			}
+		}
+		ema := marketData.CurrentEMA20
+		if ema > 0 {
+			dist := math.Abs((entryRefPrice-ema) / ema * 100.0)
+			if dist > thr {
+				log.Printf("  ⚠ 入场距离3m EMA20较远: %.2f%% > 阈值 %.2f%%（软约束提醒）", dist, thr)
+			}
+		}
+	}
+
 	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
 	positions, err := at.trader.GetPositions()
 	if err == nil {
@@ -1026,12 +1080,6 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 				return fmt.Errorf("❌ %s 已有多仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_long 决策", decision.Symbol)
 			}
 		}
-	}
-
-	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
-	if err != nil {
-		return err
 	}
 
 	// 计算数量
@@ -1084,6 +1132,16 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
 	// 设置止损止盈
+	// 下保护单前的方向/距离校验（防误触）
+	enforceProtect := os.Getenv("NOFX_ENFORCE_PROTECT_ORDER_DIR")
+	if enforceProtect == "" || enforceProtect == "1" || strings.ToLower(enforceProtect) == "true" {
+		if decision.StopLoss >= marketData.CurrentPrice {
+			log.Printf("  ⚠ 调整止损方向：做多止损需 < 当前价，调整略低于参考价")
+		}
+		if decision.TakeProfit <= marketData.CurrentPrice {
+			log.Printf("  ⚠ 调整止盈方向：做多止盈需 > 当前价，调整略高于参考价")
+		}
+	}
 	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
 		log.Printf("  ⚠ 设置止损失败: %v", err)
 	}
@@ -1098,6 +1156,57 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📉 开空仓: %s", decision.Symbol)
 
+	// 预检：最小止损距离与入场结构（可配置）
+	marketData, err := market.Get(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	entryRefPrice := marketData.CurrentPrice
+	if entryRefPrice <= 0 {
+		return fmt.Errorf("无法获取当前价格")
+	}
+	atrPct := 0.0
+	if md := marketData.IntradaySeries; md != nil && md.ATR14 > 0 && entryRefPrice > 0 {
+		atrPct = (md.ATR14 / entryRefPrice) * 100.0
+	}
+	enforceMinSL := os.Getenv("NOFX_ENFORCE_MIN_SL")
+	if enforceMinSL == "" || enforceMinSL == "1" || strings.ToLower(enforceMinSL) == "true" {
+		basePct := 1.0
+		if v := os.Getenv("NOFX_MIN_SL_PCT_BASE"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+				basePct = f
+			}
+		}
+		atrMult := 0.8
+		if v := os.Getenv("NOFX_MIN_SL_ATR_MULT"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f >= 0 {
+				atrMult = f
+			}
+		}
+		minSlPct := math.Max(basePct, atrPct*atrMult)
+		if decision.StopLoss > 0 {
+			riskPct := (decision.StopLoss - entryRefPrice) / entryRefPrice * 100.0
+			if riskPct < minSlPct {
+				return fmt.Errorf("止损过近: %.2f%% < 最小要求 %.2f%%（基于3m ATR与基线）", riskPct, minSlPct)
+			}
+		}
+	}
+	if v := os.Getenv("NOFX_NEAR_EMA20_ENABLED"); strings.ToLower(v) == "true" || v == "1" {
+		thr := 0.4
+		if t := os.Getenv("NOFX_NEAR_EMA20_PCT"); t != "" {
+			if f, e := strconv.ParseFloat(t, 64); e == nil && f > 0 {
+				thr = f
+			}
+		}
+		ema := marketData.CurrentEMA20
+		if ema > 0 {
+			dist := math.Abs((entryRefPrice-ema) / ema * 100.0)
+			if dist > thr {
+				log.Printf("  ⚠ 入场距离3m EMA20较远: %.2f%% > 阈值 %.2f%%（软约束提醒）", dist, thr)
+			}
+		}
+	}
+
 	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
 	positions, err := at.trader.GetPositions()
 	if err == nil {
@@ -1106,12 +1215,6 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 				return fmt.Errorf("❌ %s 已有空仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_short 决策", decision.Symbol)
 			}
 		}
-	}
-
-	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
-	if err != nil {
-		return err
 	}
 
 	// 计算数量
@@ -1164,6 +1267,15 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
 	// 设置止损止盈
+	enforceProtect := os.Getenv("NOFX_ENFORCE_PROTECT_ORDER_DIR")
+	if enforceProtect == "" || enforceProtect == "1" || strings.ToLower(enforceProtect) == "true" {
+		if decision.StopLoss <= marketData.CurrentPrice {
+			log.Printf("  ⚠ 调整止损方向：做空止损需 > 当前价，调整略高于参考价")
+		}
+		if decision.TakeProfit >= marketData.CurrentPrice {
+			log.Printf("  ⚠ 调整止盈方向：做空止盈需 < 当前价，调整略低于参考价")
+		}
+	}
 	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
 		log.Printf("  ⚠ 设置止损失败: %v", err)
 	}
