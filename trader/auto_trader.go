@@ -1572,6 +1572,10 @@ func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
 // GetIncludeNews 是否在决策上下文中包含新闻
 func (at *AutoTrader) GetIncludeNews() bool { return at.config.IncludeNews }
 
+// GetTradingCoins 获取该交易员配置的交易币种列表
+func (at *AutoTrader) GetTradingCoins() []string {
+	return at.tradingCoins
+}
 // GetTakerFeeRate 获取交易员账户在当前交易所下的 symbol taker 费率（若底层实现支持）；否则返回0
 func (at *AutoTrader) GetTakerFeeRate(symbol string) float64 {
 	type feeProvider interface {

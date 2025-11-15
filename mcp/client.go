@@ -31,6 +31,7 @@ type Client struct {
 	Timeout    time.Duration
 	UseFullURL bool // 是否使用完整URL（不添加/chat/completions）
 	MaxTokens  int  // AI响应的最大token数
+	Temperature float64 // 采样温度（0=确定性）
 }
 
 func New() *Client {
@@ -45,13 +46,25 @@ func New() *Client {
 		}
 	}
 
+	// 从环境变量读取温度，默认 0.5；支持 0.0~2.0
+	temperature := 0.5
+	if envTemp := os.Getenv("AI_TEMPERATURE"); envTemp != "" {
+		if parsed, err := strconv.ParseFloat(envTemp, 64); err == nil && parsed >= 0.0 && parsed <= 2.0 {
+			temperature = parsed
+			log.Printf("🔧 [MCP] 使用环境变量 AI_TEMPERATURE: %.2f", temperature)
+		} else {
+			log.Printf("⚠️  [MCP] 环境变量 AI_TEMPERATURE 无效 (%s)，使用默认值: %.2f", envTemp, temperature)
+		}
+	}
+
 	// 默认配置
 	return &Client{
-		Provider:  ProviderDeepSeek,
-		BaseURL:   "https://api.deepseek.com/v1",
-		Model:     "deepseek-chat",
-		Timeout:   120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
-		MaxTokens: maxTokens,
+		Provider:    ProviderDeepSeek,
+		BaseURL:     "https://api.deepseek.com/v1",
+		Model:       "deepseek-chat",
+		Timeout:     120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
+		MaxTokens:   maxTokens,
+		Temperature: temperature,
 	}
 }
 
@@ -179,6 +192,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("   BaseURL: %s", client.BaseURL)
 	log.Printf("   Model: %s", client.Model)
 	log.Printf("   UseFullURL: %v", client.UseFullURL)
+	log.Printf("   Temperature: %.2f", client.Temperature)
 	if len(client.APIKey) > 8 {
 		log.Printf("   API Key: %s...%s", client.APIKey[:4], client.APIKey[len(client.APIKey)-4:])
 	}
@@ -204,7 +218,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	requestBody := map[string]interface{}{
 		"model":       client.Model,
 		"messages":    messages,
-		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
+		"temperature": client.Temperature, // 可通过环境变量 AI_TEMPERATURE 覆盖，0.0=确定性
 		"max_tokens":  client.MaxTokens,
 	}
 
