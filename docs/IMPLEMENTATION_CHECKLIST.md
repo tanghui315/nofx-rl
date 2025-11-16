@@ -1,7 +1,7 @@
 # 实施任务清单（滚动维护）
 
 负责人: NOFX
-更新时间: 2025-11-16（已同步至当前实现）
+更新时间: 2025-11-16（已同步至当前实现，含前端调试页）
 
 说明: 此清单持续更新。每次任务状态变化请在此标注。
 
@@ -23,10 +23,10 @@
 - [x] `/api/dev/regime` 增强：增加 3m ATR/BB 带宽/ADX/Ichimoku 基本证据；支持 include_news=1 返回最近新闻
 - [ ] NewsScore：轻量新闻打分（关键词+时效+来源白名单）
 - [ ] PositionManager：规则化 BE/分批/ATR 追踪/结构退出；事件节流
-- [ ] 可观测性：否决/拦截/有效下单率等计数与简要指标（metrics 接口）
+ - [x] 可观测性：否决/拦截/有效下单率等计数与简要指标（/api/dev/metrics；前端 DevMonitor 页面接入）
 - [x] ReAct-lite（Go）脚手架：LocalReActRunner 可出单（EMA/MACD+ATR 风险+名义/净利估算），灰度开关 NOFX_AGENT_ENABLED；只读工具集齐（get_market/get_rules/get_account/get_positions/estimate_trade/opp_score）
-- [ ] 提示词目录重组（按策略分类：base, trend_carry, pullback_ema, breakout_volexp, range_grid）
-  - [x] 目录重组（初步）：新增 prompts/pullback_ema/prompt_pullback_ema.txt、prompts/trend_carry/prompt_trend_carry.txt；PromptManager 支持递归加载；Router 注入模板键（相对路径）
+ - [x] 提示词目录重组（按策略分类：base, trend_carry, pullback_ema, breakout_volexp, range_grid）
+   - [x] 目录重组（初步）：新增 prompts/pullback_ema/prompt_pullback_ema.txt、prompts/trend_carry/prompt_trend_carry.txt；PromptManager 支持递归加载；Router 注入模板键（相对路径）
 - [ ] 限价单执行（交易所）：GTC/IOC、部分成交、过期/撤单管理
   - [x] 限价下单（开仓）路径（Binance）：OpenLongLimit/OpenShortLimit（GTC）；Aster 复用现有限价实现；Hyperliquid 暂不支持（占位）
   - [x] 限价生命周期（基础）：AutoTrader 记录 pending → 到期撤单/成交后补挂SL/TP；/api/dev/open_orders、/api/dev/pending_limits 调试接口
@@ -36,13 +36,14 @@
 ## 前端
 
 - [ ] 风险档位选择：一个滑块/下拉（ultra_safe | safe | balanced | bold | ultra_bold）
-- [ ] PreCheck 可视：显示开关、阈值、放行符号、本轮是否调用 LLM
-- [ ] 决策日志增强：标注“wait: preCheck 未达标”，显示候选与放行符号
-- [ ] 亏损分析页：接入 `/api/dev/losses`（symbol/side/qty/open/close/pnl/duration/source）
-- [ ] 分型/机会分页：接入 `/api/dev/regime`（type/confidence/opportunity breakdown）
-- [ ] 路由与软化通道标识（待 Router 注入）：展示 route/template/constraints，软化通道徽标
-- [ ] 限价单面板（后续）：挂单价格/数量/到期/部分成交状态
-- [ ] 新闻分数展示（后续）：NewsScore 与来源/时效
+- [x] PreCheck 可视：DevMonitor 显示 metrics（拦截/放行/原因、Agent/LLM 次数、限价生命周期统计）
+- [x] 亏损分析：DevMonitor 集成 `/api/dev/losses`
+- [x] Regime/Opportunities/News：DevMonitor 集成 `/api/dev/regime`
+- [x] 挂单可视：DevMonitor 集成 `/api/dev/open_orders`、`/api/dev/pending_limits`、`/api/dev/cancel_order`
+- [ ] 路由与软化通道标识：在主页面/决策卡片展示 route/template/constraints，软化通道徽标
+- [ ] 档位选择器：前端滑块/下拉（profile）并提交保存
+- [ ] 限价单面板（增强）：挂单价格/数量/到期/部分成交状态（独立页面或模块）
+- [ ] 新闻分数展示（增强）：NewsScore 与来源/时效（非调试视图）
 
 ## 配置与运维
 
@@ -55,11 +56,11 @@
 ## 里程碑
 
 - 阶段 1（灰度）
-  - [ ] 完成 Router 注入 + PreCheck 日志增强 + `/api/dev/regime` 增强 + 档位映射
+  - [x] 完成 Router 注入 + PreCheck 日志增强 + `/api/dev/regime` 增强 + 档位映射（基础）+ DevMonitor 前端页
 - 阶段 2
-  - [ ] 限价单校验路径 + ReAct-lite v1 工具 + 基础观测
+  - [x] 限价单校验路径 + ReAct-lite v1 工具 + 基础观测（/api/dev/metrics）
 - 阶段 3
-  - [ ] PositionManager 规则化 + 交易所限价路径 + 提示词目录重组
+  - [ ] PositionManager 规则化（分批/结构退出增强）+ 交易所限价路径（IOC/超短有效期）+ 提示词目录重组（完善）
 
 ## 备注
 
