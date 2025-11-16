@@ -549,6 +549,26 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 	return result, nil
 }
 
+// OpenLongLimit 暂不支持（占位实现）
+func (t *HyperliquidTrader) OpenLongLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("Hyperliquid 暂不支持限价开多（占位）")
+}
+
+// OpenShortLimit 暂不支持（占位实现）
+func (t *HyperliquidTrader) OpenShortLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("Hyperliquid 暂不支持限价开空（占位）")
+}
+
+// ListOpenOrders 暂不支持（占位）
+func (t *HyperliquidTrader) ListOpenOrders(symbol string) ([]map[string]interface{}, error) {
+	return nil, fmt.Errorf("Hyperliquid 暂不支持查询未完成订单")
+}
+
+// CancelOrder 暂不支持（占位）
+func (t *HyperliquidTrader) CancelOrder(symbol string, orderId int64) error {
+	return fmt.Errorf("Hyperliquid 暂不支持取消指定订单")
+}
+
 // CancelStopOrders 取消该币种的止盈/止
 
 // CancelStopLossOrders 仅取消止损单（Hyperliquid 暂无法区分止损和止盈，取消所有）

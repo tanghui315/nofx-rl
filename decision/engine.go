@@ -106,6 +106,11 @@ type Decision struct {
 	StopLoss        float64 `json:"stop_loss,omitempty"`
 	TakeProfit      float64 `json:"take_profit,omitempty"`
 
+	// 订单类型（预留：限价单支持）
+	OrderType   string  `json:"order_type,omitempty"`   // "market" | "limit"
+	LimitPrice  float64 `json:"limit_price,omitempty"`  // 限价价格
+	ExpireKBars int     `json:"expire_kbars,omitempty"` // 有效期（以3mK线为单位）
+
 	// 调整参数（新增）
 	NewStopLoss     float64 `json:"new_stop_loss,omitempty"`    // 用于 update_stop_loss
 	NewTakeProfit   float64 `json:"new_take_profit,omitempty"`  // 用于 update_take_profit
@@ -124,6 +129,20 @@ type FullDecision struct {
 	CoTTrace     string     `json:"cot_trace"`     // 思维链分析（AI输出）
 	Decisions    []Decision `json:"decisions"`     // 具体决策列表
 	Timestamp    time.Time  `json:"timestamp"`
+}
+
+// GetOpenPositionsForSymbol 返回 ctx 中指定 symbol 的持仓（便于Agent复用）
+func GetOpenPositionsForSymbol(ctx *Context, symbol string) []PositionInfo {
+	var out []PositionInfo
+	if ctx == nil {
+		return out
+	}
+	for _, p := range ctx.Positions {
+		if p.Symbol == symbol && p.Quantity != 0 {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // GetFullDecision 获取AI的完整交易决策（批量分析所有币种和持仓）
@@ -328,7 +347,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 		accountEquity*0.8, accountEquity*1.5, accountEquity*5, accountEquity*10))
 	sb.WriteString(fmt.Sprintf("4. 杠杆限制: **山寨币最大%dx杠杆** | **BTC/ETH最大%dx杠杆** (⚠️ 严格执行，不可超过)\n", altcoinLeverage, btcEthLeverage))
 	sb.WriteString("5. 保证金: 总使用率 ≤ 90%\n")
-	sb.WriteString("6. 开仓金额: 建议 **≥12 USDT** (交易所最小名义价值 10 USDT + 安全边际)\n\n")
+	sb.WriteString("6. 每单保证金: 必须 **≥10 USDT**（required_margin = position_size_usd / leverage）\n\n")
 
 	// 3. 输出格式 - 动态生成
 	sb.WriteString("#输出格式\n\n")
@@ -354,6 +373,17 @@ func buildUserPrompt(ctx *Context) string {
 	// 系统状态
 	sb.WriteString(fmt.Sprintf("时间: %s | 周期: #%d | 运行: %d分钟\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
+
+	// 分型与策略路由（用于给出高层环境与执行偏好）
+	regime := DetectRegime(ctx.MarketDataMap)
+	smallCapital := ctx.Account.TotalEquity <= 300 // 简化：净值<=300 视为小资金（后续用 profile 映射覆盖）
+	route := RouteStrategy(regime, ctx.Account.TotalEquity, smallCapital)
+	sb.WriteString("## 分型与策略路由\n")
+	sb.WriteString(fmt.Sprintf("- Regime: %s (confidence %d)\n", regime.Type, regime.Confidence))
+	sb.WriteString(fmt.Sprintf("- Route: %s | Template: %s\n", route.Route, route.TemplatePath))
+	sb.WriteString(fmt.Sprintf("- Constraints: rr_min=%.1f, leverage_max=%d, risk_pct_max=%.1f, ema_near_pct=%.1f, expire_kbars=%d, default_order=%s, btc_soft=%v\n\n",
+		route.Constraints.RRMin, route.Constraints.LeverageMax, route.Constraints.RiskPctMax,
+		route.Constraints.EMANearPct, route.Constraints.ExpireKBars, route.Constraints.DefaultOrderType, route.Constraints.BTCSoftChannel))
 
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
@@ -729,18 +759,16 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("仓位大小必须大于0: %.2f", d.PositionSizeUSD)
 		}
 
-		// ✅ 验证最小开仓金额（防止数量格式化为 0 的错误）
-		// Binance 最小名义价值 10 USDT + 安全边际
-		const minPositionSizeGeneral = 12.0 // 10 + 20% 安全边际
-		const minPositionSizeBTCETH = 60.0  // BTC/ETH 因价格高和精度限制需要更大金额（更灵活）
+		// ✅ 验证每单最低保证金 ≥ 10 USDT（用户需求）
+		requiredMargin := d.PositionSizeUSD / float64(d.Leverage)
+		if requiredMargin < 10.0 {
+			return fmt.Errorf("每单保证金过小(%.2f USDT)，必须≥10.00 USDT（required_margin = position_size_usd / leverage）", requiredMargin)
+		}
 
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			if d.PositionSizeUSD < minPositionSizeBTCETH {
-				return fmt.Errorf("%s 开仓金额过小(%.2f USDT)，必须≥%.2f USDT（因价格高且精度限制，避免数量四舍五入为0）", d.Symbol, d.PositionSizeUSD, minPositionSizeBTCETH)
-			}
-		} else {
-			if d.PositionSizeUSD < minPositionSizeGeneral {
-				return fmt.Errorf("开仓金额过小(%.2f USDT)，必须≥%.2f USDT（Binance 最小名义价值要求）", d.PositionSizeUSD, minPositionSizeGeneral)
+		// ✅ 验证最小名义价值（结合交易所规则，避免 -4164）
+		if rules, err := market.GetSymbolExchangeRules(d.Symbol); err == nil && rules.MinNotional > 0 {
+			if d.PositionSizeUSD < rules.MinNotional {
+				return fmt.Errorf("%s 开仓名义过小(%.2f USDT)，需≥交易所最小名义 %.2f USDT", d.Symbol, d.PositionSizeUSD, rules.MinNotional)
 			}
 		}
 
@@ -798,6 +826,69 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if riskRewardRatio < 3.0 {
 			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥3.0:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
 				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+		}
+
+		// 预计绝对净利阈值：避免手续费蚕食（小资金友好）
+		absMin := 1.5
+		if v := os.Getenv("NOFX_ABS_PROFIT_MIN_USD"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+				absMin = f
+			}
+		}
+		feeMul := 5.0
+		if v := os.Getenv("NOFX_PROFIT_FEE_MULTIPLIER"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+				feeMul = f
+			}
+		}
+		takerFee := 0.0004 // 0.04%（保守默认，可在后续从配置注入）
+		expectedGross := d.PositionSizeUSD * (rewardPercent / 100.0)
+		estFees := d.PositionSizeUSD * takerFee * 2.0 // 开平各一次
+		requiredMin := math.Max(absMin, estFees*feeMul)
+		netExpected := expectedGross - estFees
+		if netExpected < requiredMin {
+			return fmt.Errorf("预计净利过低(≈%.2fU) < 阈值(≥%.2fU)，名义%.2fU、目标幅度≈%.2f%%、手续费≈%.2fU，建议提高RR/规模或等待更好结构",
+				netExpected, requiredMin, d.PositionSizeUSD, rewardPercent, estFees)
+		}
+
+		// 限价单校验（若指定）
+		if d.OrderType != "" && d.OrderType != "market" && d.OrderType != "limit" {
+			return fmt.Errorf("order_type 非法: %s（允许: market|limit）", d.OrderType)
+		}
+		if d.OrderType == "limit" {
+			if d.LimitPrice <= 0 {
+				return fmt.Errorf("limit_price 必须 > 0")
+			}
+			// 做多限价应 ≤ 当前价；做空限价应 ≥ 当前价；偏离不可过大
+			md, err := market.Get(d.Symbol)
+			if err == nil && md != nil && md.CurrentPrice > 0 {
+				cur := md.CurrentPrice
+				maxDev := 3.0 // 默认 3%
+				if v := os.Getenv("NOFX_LIMIT_MAX_DEVIATION_PCT"); v != "" {
+					if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+						maxDev = f
+					}
+				}
+				dev := (math.Abs(d.LimitPrice-cur) / cur) * 100.0
+				if d.Action == "open_long" {
+					if d.LimitPrice > cur {
+						return fmt.Errorf("做多限价需 ≤ 当前价（limit_price=%.6f > 当前价=%.6f）", d.LimitPrice, cur)
+					}
+					if dev > maxDev {
+						return fmt.Errorf("做多限价与现价偏离过大: %.2f%% > %.2f%%", dev, maxDev)
+					}
+				} else { // open_short
+					if d.LimitPrice < cur {
+						return fmt.Errorf("做空限价需 ≥ 当前价（limit_price=%.6f < 当前价=%.6f）", d.LimitPrice, cur)
+					}
+					if dev > maxDev {
+						return fmt.Errorf("做空限价与现价偏离过大: %.2f%% > %.2f%%", dev, maxDev)
+					}
+				}
+			}
+			if d.ExpireKBars < 0 {
+				return fmt.Errorf("expire_kbars 必须为非负整数")
+			}
 		}
 	}
 

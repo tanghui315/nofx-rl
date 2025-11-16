@@ -41,6 +41,8 @@
   - 若 ≤$10，必须改用完全平仓
 - 每笔交易必须预设止损与止盈，单笔账户风险不超过 3-4%
 - 预估清算价距离 ≥15%，避免被强平
+- 每单保证金 ≥10 USDT（required_margin = position_size_usd / leverage；不达标 → wait）
+- 名义价值 ≥ 交易所最小名义（NOTIONAL/MIN_NOTIONAL；BTC/ETH 常见 ≥100U；不足 → wait）；数量需按 MARKET_LOT_SIZE/LOT_SIZE 步长对齐（向下取整后仍需满足最小名义）
 
 ---
 

@@ -15,6 +15,7 @@ import { useSystemConfig } from './hooks/useSystemConfig'
 import { t, type Language } from './i18n/translations'
 import { api } from './lib/api'
 import { AnomalyConfigPage } from './pages/AnomalyConfigPage'
+import DevMonitorPage from './pages/DevMonitorPage'
 import { FAQPage } from './pages/FAQPage'
 import { LandingPage } from './pages/LandingPage'
 import type {
@@ -360,6 +361,49 @@ function App() {
         />
         <main className="max-w-[1920px] mx-auto px-6 py-6 pt-24">
           <AnomalyConfigPage />
+        </main>
+      </div>
+    )
+  }
+  if (route === '/dev-monitor') {
+    return (
+      <div
+        className="min-h-screen"
+        style={{ background: '#0B0E11', color: '#EAECEF' }}
+      >
+        <HeaderBar
+          isLoggedIn={!!user}
+          currentPage={currentPage}
+          language={language}
+          onLanguageChange={setLanguage}
+          user={user}
+          onLogout={logout}
+          isAdminMode={systemConfig?.admin_mode}
+          onPageChange={(page) => {
+            if (page === 'competition') {
+              window.history.pushState({}, '', '/competition')
+              setRoute('/competition')
+              setCurrentPage('competition')
+            } else if (page === 'traders') {
+              window.history.pushState({}, '', '/traders')
+              setRoute('/traders')
+              setCurrentPage('traders')
+            } else if (page === 'trader') {
+              window.history.pushState({}, '', '/dashboard')
+              setRoute('/dashboard')
+              setCurrentPage('trader')
+            } else if (page === 'faq') {
+              window.history.pushState({}, '', '/faq')
+              setRoute('/faq')
+            } else if (page === 'anomaly-config') {
+              window.history.pushState({}, '', '/anomaly-config')
+              setRoute('/anomaly-config')
+              setCurrentPage('anomaly-config')
+            }
+          }}
+        />
+        <main className="max-w-[1920px] mx-auto px-6 py-6 pt-24">
+          <DevMonitorPage />
         </main>
       </div>
     )

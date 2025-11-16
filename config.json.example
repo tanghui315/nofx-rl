@@ -1,6 +1,7 @@
 {
   "admin_mode": true,
   "beta_mode": false,
+  "profile": "balanced",
   "leverage": {
     "btc_eth_leverage": 5,
     "altcoin_leverage": 5

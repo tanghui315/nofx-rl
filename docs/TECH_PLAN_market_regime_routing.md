@@ -4,6 +4,56 @@
 更新时间: 2025-11-15
 状态: 草案（建议先灰度）
 
+## 0. 高优先事项与最终决定（落地前必须明确）
+
+目标：先把“高优先级、立刻影响交易质量”的事项敲定，作为第一阶段灰度发布范围。
+
+- PreCheck 门禁（必须）
+  - 只在“有机会时”才调用 LLM；否则直接 wait。
+  - 触发条件（OpportunityScore，默认阈值 8，可配）：
+    - EMA 贴近度（3m/15m vs EMA20，<=0.4%）+2
+    - BB 带宽收缩后放大 +2
+    - OI_delta >= 5% +1
+    - 成交量放大 >=1.5x +1
+    - 绝对净利 >= max(手续费×5, 固定U) +3
+    - BTC 支持或软化通道 +2
+  - 频控：同一 symbol 间隔 >=10 分钟；全局单次扫描最多调用 1 次（默认）。
+  - 配置来源：config.json llm.*（已在示例中约定）。
+
+- 策略路由（必须）
+  - Regime ∈ {trend_early, trend_mid, trend_late, range}；小资金优先 pullback_ema。
+  - 路由输出 StrategyRoute + constraints + template（第一阶段沿用 v6.3 基座模板）。
+  - 默认映射：
+    - trend_early/mid → pullback_ema（小资金）或 trend_carry（非小资金）
+    - trend_late → no_trade
+    - range → range_grid（小仓，绝对净利阈值必须满足）
+  - 软化通道：仅在震荡/不明朗（1h/4h ADX<15 或方向分歧）且无显著反向时放行，附加约束：信心≥92、RR≥3.5、杠杆≤3x、risk≤1%、需贴近 EMA20（±0.4%）。
+
+- 限价单支持（必须）
+  - Decision 扩展字段：order_type("market"|"limit"), limit_price, expire_kbars（已在结构中预留）。
+  - 路由默认：
+    - pullback_ema：limit 优先，靠近 EMA20 的反抽/回抽位；expire_kbars 6–12。
+    - trend_carry：market（再入场场景可 limit）；expire_kbars 4–6。
+    - breakout_volexp：market 或短 IOC；expire_kbars 2–4。
+    - range_grid：limit；expire_kbars 10–20。
+  - 校验（引擎层）：方向与当前价一致（多 limit<=现价；空 limit>=现价）、偏离不超过 ~2–3%、步长与最小名义满足、绝对净利阈值通过；到期未成撤单。
+
+- 小资金护栏（必须）
+  - 每单保证金 ≥ 10U（required_margin = position_size_usd / leverage）。
+  - 名义 ≥ 交易所 MIN_NOTIONAL（并做 MARKET_LOT_SIZE/LOT_SIZE 步长对齐）。
+  - 预计绝对净利 ≥ max(手续费×5, 固定阈值 1.5U)。
+  - 止损距离 ≥ max(1.0%, 0.8×3m ATR%)；保护单方向正确（系统已强校验）。
+
+- LLM 频率（必须）
+  - 温度默认 0.0（确定性）；仅在 preCheck 通过时调用；carry/range 阶段默认不调用。
+  - 配置入口：config.json llm.*；已提供示例字段（opp_score_min、max_calls_hourly/daily、symbol_min_interval_min、global_max_per_scan、temperature）。
+
+- 验收标准（第一阶段）
+  - 交易所拒单类错误显著下降（-4164、-4003 基本归零）。
+  - 触发 LLM 的调用次数下降（对比旧版 >50%）。
+  - 单笔净利中位数/手续费比 > 3。
+  - 有效下单率（通过引擎校验→成功成交）显著提升。
+
 
 ## 1. 背景与问题
 
@@ -358,9 +408,62 @@ LLM 与规则分工
 - validateDecision：按路由与全局规则校验 `order_type/limit_price`；
 - Trader 层：支持限价下单、查询/取消、部分成交更新；
 - 前端：展示挂单列表、已成交/部分成交、过期/取消；
-- Router：在 constraints 输出 `default_order_type`、`limit_anchor`（ema20/vwap/level）、`expire_kbars` 建议。
-
-## 16. 降低 LLM 频次：事件驱动 + 机会阈值 + 去抖
+	- Router：在 constraints 输出 `default_order_type`、`limit_anchor`（ema20/vwap/level）、`expire_kbars` 建议。
+	
+	## 15. 档位化配置（超参数预设）
+	
+	目标：仅向用户暴露一个“风险档位”旋钮，其余复杂阈值/频率/风控参数全部由档位映射生成（仍保留高级覆盖入口）。
+	
+	- 对外配置（唯一必填）
+	  - config.json: `"profile": "balanced"`（ultra_safe | safe | balanced | bold | ultra_bold）
+	
+	- 内部映射（示例，落地可微调）
+	  - ultra_safe（极稳）
+	    - opp_score_min=10；rr_min=3.5；risk_pct_max=1.0%；ema_near_pct=0.3
+	    - leverage_max=3；abs_profit_min_usd=2.0；profit_fee_multiplier=6
+	    - symbol_min_interval=15m；global_max_per_scan=1；max_calls_hourly/daily=3/50
+	    - btc_soft_channel=off；sl_min_base=1.2%；temperature=0.0
+	  - safe（稳健）
+	    - opp_score_min=9；rr_min=3.3；risk_pct_max=1.5%；ema_near_pct=0.35
+	    - leverage_max=4；abs_profit_min_usd=1.8；profit_fee_multiplier=5.5
+	    - symbol_min_interval=12m；global_max_per_scan=1；max_calls=6/100
+	    - btc_soft_channel=cautious；sl_min_base=1.0%；temperature=0.0
+	  - balanced（均衡，默认）
+	    - opp_score_min=8；rr_min=3.0；risk_pct_max=2.0%；ema_near_pct=0.4
+	    - leverage_max=5；abs_profit_min_usd=1.5；profit_fee_multiplier=5
+	    - symbol_min_interval=10m；global_max_per_scan=1；max_calls=10/200
+	    - btc_soft_channel=on（按文档条件）；sl_min_base=1.0%；temperature=0.0
+	  - bold（积极）
+	    - opp_score_min=7；rr_min=2.8；risk_pct_max=2.5%；ema_near_pct=0.5
+	    - leverage_max=6；abs_profit_min_usd=1.2；profit_fee_multiplier=4.5
+	    - symbol_min_interval=8m；global_max_per_scan=2；max_calls=20/400
+	    - btc_soft_channel=on（略放松）；sl_min_base=0.8%；temperature=0.1
+	  - ultra_bold（进取）
+	    - opp_score_min=6；rr_min=2.5；risk_pct_max=3.0%；ema_near_pct=0.6
+	    - leverage_max=8；abs_profit_min_usd=1.0；profit_fee_multiplier=4
+	    - symbol_min_interval=6m；global_max_per_scan=3；max_calls=30/600
+	    - btc_soft_channel=on（放松最多）；sl_min_base=0.8%；temperature=0.15
+	
+	- 固定硬约束（不随档位变化）
+	  - 每单保证金 ≥ 10U（required_margin = position_size_usd / leverage）
+	  - 名义 ≥ MIN_NOTIONAL 且数量按 MARKET_LOT_SIZE/LOT_SIZE 对齐（向下取整后仍需满足最小名义）
+	  - 止损距离 ≥ max(1.0%, 0.8×3m ATR%)
+	  - 保护单方向正确（LONG: SL<现价/TP>现价；SHORT 相反）
+	
+	- 路由与软化通道的档位影响
+	  - 路由映射保持（trend_early/mid → pullback_ema|trend_carry；trend_late → no_trade；range → range_grid）
+	  - 档位决定：是否启用软化通道、启用条件强弱、所需信心/RR、杠杆与风险上限、LLM 调用预算、限价单偏好与有效期范围。
+	
+	- 覆盖优先级（实现）
+	  1) 显式高级覆盖（config.json 中具体字段）>
+	  2) 档位派生值（ProfileToParams(profile)）>
+	  3) 内置默认值
+	
+	- 前端与可观测
+	- 前端：一个滑块/旋钮选择档位，并显示档位摘要；
+	- 日志：打印“当前档位 + 派生参数摘要”，便于复盘与灰度对比。
+	
+	## 16. 降低 LLM 频次：事件驱动 + 机会阈值 + 去抖
 
 目标：将 LLM 从固定扫描循环中解耦，仅在“真机会”出现时触发，减少费用与噪声决策。
 
@@ -453,8 +556,106 @@ LLM 参与边界（尽量少）
 实现蓝图
 - PositionManager（goroutine）：订阅事件，按状态机更新 SL/TP/partial_close/close；更新节流（幅度≥0.3%或间隔≥30s）；  
 - preCheck 门禁（engine）：机会达标才唤起 LLM；carry/range 轨道默认不唤起；  
-- 配置（config.json）：  
-  - 风险预算：risk_per_trade_pct、max_positions、max_total_margin_pct；  
-  - 追踪/分批：be_r、多级分批数组、atr_trail_k、update_throttle_sec；  
-  - 绝对利润阈值：abs_profit_min_usd、profit_fee_multiplier；  
-  - LLM 预算：llm.event_mode、opp_score_min、symbol_min_interval_min、max_calls_hourly/daily。
+	- 配置（config.json）：  
+	  - 风险预算：risk_per_trade_pct、max_positions、max_total_margin_pct；  
+	  - 追踪/分批：be_r、多级分批数组、atr_trail_k、update_throttle_sec；  
+	  - 绝对利润阈值：abs_profit_min_usd、profit_fee_multiplier；  
+	  - LLM 预算：llm.event_mode、opp_score_min、symbol_min_interval_min、max_calls_hourly/daily。
+
+## 18. ReAct-lite Agent（Go 原生）与 smolagents 微服务（可选）
+
+目标：在降频前提下，让 LLM 以“按需取数、分步验证”的方式做更稳健的决策；保持所有交易执行与硬风控在引擎侧，LLM 不直接下单。
+
+- 模式选择（分阶段）
+  - A. ReAct-lite（Go 内嵌，优先实施）
+    - 受 preCheck 门禁：仅在 OpportunityScore 达标时启动
+    - 步数上限：2-3 步；温度 0.0；总 token/步数双限
+    - 只读工具（白名单）：
+      - get_market(symbol, windows) → 简要快照（价格、EMA、MACD、ATR 等）
+      - get_rules(symbol) → 交易所 MIN_NOTIONAL / MARKET_LOT_SIZE / LOT_SIZE
+      - opp_score(symbol) → 结构/量能/OI/净利估算的统一分
+      - news_score(symbol|global) → 新闻打分（如有）
+    - 产出：受限 JSON 决策（不含执行），由引擎 validateDecision 后落单
+    - 安全：禁网络、禁写；工具结果截断（≤2KB）；工具参数校验；失败回退单轮模板
+  - B. smolagents 微服务（可选后续）
+    - 独立 Python 服务；仅在 preCheck 通过时调用
+    - 优点：工具生态更快扩展；缺点：新依赖与跨语言调试成本
+
+- 集成流程（ReAct-lite）
+  1) preCheck 命中 → Router 选择 route；
+  2) 若 route.agent=true（如 pullback_ema 优先）→ 调用 AgentRunner
+  3) Agent 执行最多 N 步：Thought → Action(tool+args) → Observation（由工具返回）→ 最终 JSON
+  4) 引擎对 JSON 做硬校验（保证金≥10U、MIN_NOTIONAL/步长、RR、SL距离、净利阈值、方向保护等）
+  5) 通过则执行下单/挂单（含限价生命周期管理）
+
+- 频控与缓存
+  - 仍受 llm.* 预算约束；同 symbol 最小间隔遵循档位
+  - 工具级缓存：同 symbol 的 get_rules 缓存 1h；get_market 可短缓存（≤30s）以减负
+
+- 实现清单（A 阶段）
+  - decision/agent/runner.go（新）：有限步 ReAct 控制循环
+  - decision/agent/tools.go（新）：只读工具实现与参数校验
+  - prompts/agent/react_base.txt（新）：极简 ReAct 模板（要求输出最终 JSON）
+  - decision/router.go：为特定 route 标记 agent=true
+  - auto_trader：在调用 LLM 前检测 route.agent，分流到 AgentRunner
+  - 日志：保存步骤轨迹（Thought/Action/Observation/Final）
+
+- 配置项（建议）
+  - llm.agent_enabled: true|false（默认 false，灰度）
+  - llm.agent_max_steps: 3
+  - llm.agent_step_token_limit: 512
+  - llm.agent_run_token_limit: 2048
+  - llm.agent_tools: ["get_market","get_rules","opp_score","news_score"]
+
+	- 边界与保底
+	  - 永不授予“下单类工具”；交易执行仍走引擎与硬风控
+	  - ReAct-lite 失败或超限时回退到单轮模板（保持可用性）
+
+### 18.1 工具清单与优先级
+
+- V1 必备（建议首先落地）
+  - get_market(symbol, windows=["3m","15m","1h","4h"])
+    - 返回: price、ema20(各窗)、macd(3m/15m)、rsi(3m/15m)、atr_3m、bb_width、vwap、关键信号
+  - get_rules(symbol)
+    - 返回: min_notional、step_size_market、step_size_lot、tick_size
+  - get_account()
+    - 返回: equity、available_balance、margin_used_pct、position_count
+  - get_positions(symbol?)
+    - 返回: {side, qty, leverage, entry, mark, sl, tp, pnl}
+  - estimate_trade(symbol, side, leverage, position_size_usd, stop_loss, take_profit)
+    - 返回: rr、margin_needed、est_fees、net_profit_est、min_notional_ok、step_ok
+  - opp_score(symbol)
+    - 返回: score_total、breakdown（ema贴近/量能/OI/RR/净利/BTC支持等，与 preCheck 同口径）
+
+- V1.1 增强（按需启用）
+  - get_regime() → {type, confidence, evidence}
+  - get_btc_state() → {dir_1h, dir_4h, adx, macd_sign}
+  - get_news_score(symbol|global) → {score, sources, age_min}
+  - get_open_orders(symbol) → 未决限价摘要（避免重复挂单）
+  - get_losses(trader_id, lookback, limit, symbols?) → 仅亏损成交记录（来源=exchange）
+  - get_perf_summary() → 连亏、最大回撤、最差币种、近期亏损标签
+
+- 辅助校验（避免交易所报错/小额残留）
+  - compute_quantity(symbol, position_size_usd, price) → qty_formatted（按步长向下取整）
+  - check_partial_close_feasible(symbol, side, close_pct) → {ok, fallback="full_close"}（剩余价值>10U 且步长可下）
+
+- 安全与输出
+  - 全为只读；输出结构化且≤2KB；参数白名单校验；错误回退单轮模板。
+
+### 18.2 技术选型与可替换后端
+
+- 默认实现：LocalReActRunner（Go 原生）
+  - 优点：零外部依赖、与引擎/风控同语言、可控性强
+  - 实现：decision/agent/runner.go + tools.go；通过统一 AgentRunner 接口供 engine 调用
+
+- 备选一：SmolagentsRunner（Python 微服务）
+  - 优点：工具生态丰富、扩展快；缺点：部署与跨语言调试成本
+  - 形态：HTTP/gRPC 服务，接收 symbols/上下文，返回 JSON 决策 + trace
+
+- 备选二：Gemini/ADK/Tool‑Calling（Go SDK/HTTP）
+  - 场景：若主力 LLM 切到 Gemini 且需要其原生工具调用能力
+  - 做法：实现 GeminiRunner，映射工具 schema，仍通过 AgentRunner 接口接入
+
+- 抽象接口（建议）
+  - type AgentRunner interface { Run(ctx, symbols) (decisions, trace, error) }
+  - 多实现并存：LocalReActRunner（默认）/SmolagentsRunner/GeminiRunner

@@ -46,6 +46,7 @@ type TelegramNewsChannel struct {
 type ConfigFile struct {
     AdminMode          bool                  `json:"admin_mode"`
     BetaMode           bool                  `json:"beta_mode"`
+    Profile            string                `json:"profile"` // 风险档位：ultra_safe|safe|balanced|bold|ultra_bold
     APIServerPort      int                   `json:"api_server_port"`
     UseDefaultCoins    bool                  `json:"use_default_coins"`
     DefaultCoins       []string              `json:"default_coins"`
@@ -63,6 +64,29 @@ type ConfigFile struct {
     HTTPSProxy         string                `json:"https_proxy"`
     NoProxy            string                `json:"no_proxy"`
     News               []NewsSourceConfig    `json:"news"` // 新闻源配置（可选）
+    // LLM/交易阈值（可选）
+    LLM                *LLMSettings          `json:"llm"`
+    TradingThresholds  *TradingThresholds    `json:"trading_thresholds"`
+}
+
+// LLMSettings LLM/预检/预算 配置
+type LLMSettings struct {
+    EventMode            bool    `json:"event_mode"`              // 是否启用事件触发（预检）模式
+    OppScoreMin          int     `json:"opp_score_min"`           // 机会分阈值
+    EmaProxPct           float64 `json:"ema_prox_pct"`            // 贴近 EMA20 阈值（%）
+    OIDeltaPct           float64 `json:"oi_delta_pct"`            // OI 变化阈值（%）
+    BBBandwidthMin       float64 `json:"bb_bw_min"`               // 带宽阈值（%）
+    MaxCallsHourly       int     `json:"max_calls_hourly"`        // 每小时 LLM 调用上限
+    MaxCallsDaily        int     `json:"max_calls_daily"`         // 每日 LLM 调用上限
+    SymbolMinIntervalMin int     `json:"symbol_min_interval_min"` // 同符号最小间隔（分钟）
+    GlobalMaxPerScan     int     `json:"global_max_per_scan"`     // 每次扫描最多放行的符号
+    Temperature          float64 `json:"temperature"`             // 模型温度
+}
+
+// TradingThresholds 交易阈值配置
+type TradingThresholds struct {
+    AbsProfitMinUSD     float64 `json:"abs_profit_min_usd"`
+    ProfitFeeMultiplier float64 `json:"profit_fee_multiplier"`
 }
 
 // loadConfigFile 读取并解析config.json文件
@@ -86,6 +110,109 @@ func loadConfigFile() (*ConfigFile, error) {
 	}
 
 	return &configFile, nil
+}
+
+// applyLLMProfile 根据档位设置默认的 LLM/PreCheck 相关环境变量（用户显式 env 优先）
+func applyLLMProfile(profile string) {
+    if profile == "" {
+        return
+    }
+    // 简化：仅当对应 env 未设置时才写入
+    setIfEmpty := func(key, val string) {
+        if os.Getenv(key) == "" {
+            _ = os.Setenv(key, val)
+        }
+    }
+    switch strings.ToLower(strings.TrimSpace(profile)) {
+    case "ultra_safe":
+        setIfEmpty("NOFX_OPP_SCORE_MIN", "10")
+        setIfEmpty("NOFX_EMA_PROX_PCT", "0.3")
+        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "15")
+        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
+        setIfEmpty("AI_TEMPERATURE", "0.0")
+        // 软通道严格：不额外设置开关，提示词/引擎已默认保守
+    case "safe":
+        setIfEmpty("NOFX_OPP_SCORE_MIN", "9")
+        setIfEmpty("NOFX_EMA_PROX_PCT", "0.35")
+        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "12")
+        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
+        setIfEmpty("AI_TEMPERATURE", "0.0")
+    case "balanced":
+        setIfEmpty("NOFX_OPP_SCORE_MIN", "8")
+        setIfEmpty("NOFX_EMA_PROX_PCT", "0.4")
+        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "10")
+        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
+        setIfEmpty("AI_TEMPERATURE", "0.0")
+    case "bold":
+        setIfEmpty("NOFX_OPP_SCORE_MIN", "7")
+        setIfEmpty("NOFX_EMA_PROX_PCT", "0.5")
+        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "8")
+        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "2")
+        setIfEmpty("AI_TEMPERATURE", "0.1")
+    case "ultra_bold":
+        setIfEmpty("NOFX_OPP_SCORE_MIN", "6")
+        setIfEmpty("NOFX_EMA_PROX_PCT", "0.6")
+        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "6")
+        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "3")
+        setIfEmpty("AI_TEMPERATURE", "0.15")
+    default:
+        // 未识别，忽略
+        return
+    }
+    log.Printf("🎚️  已应用 Profile 档位: %s（如需覆盖请设置环境变量）", profile)
+}
+
+// applyLLMFromConfig 将 config.json 的 llm 与 trading_thresholds 应用为默认（若 env 未显式设置）
+func applyLLMFromConfig(cfg *ConfigFile) {
+    if cfg == nil {
+        return
+    }
+    setIfEmpty := func(key, val string) {
+        if os.Getenv(key) == "" && val != "" {
+            _ = os.Setenv(key, val)
+        }
+    }
+    if l := cfg.LLM; l != nil {
+        // 预检事件模式
+        if l.EventMode {
+            setIfEmpty("NOFX_PRECHECK_ENABLED", "1")
+        }
+        if l.OppScoreMin > 0 {
+            setIfEmpty("NOFX_OPP_SCORE_MIN", strconv.Itoa(l.OppScoreMin))
+        }
+        if l.EmaProxPct > 0 {
+            setIfEmpty("NOFX_EMA_PROX_PCT", fmt.Sprintf("%.3f", l.EmaProxPct))
+        }
+        if l.OIDeltaPct > 0 {
+            setIfEmpty("NOFX_OI_DELTA_PCT", fmt.Sprintf("%.1f", l.OIDeltaPct))
+        }
+        if l.BBBandwidthMin > 0 {
+            setIfEmpty("NOFX_BB_BW_MIN", fmt.Sprintf("%.2f", l.BBBandwidthMin))
+        }
+        if l.MaxCallsHourly > 0 {
+            setIfEmpty("NOFX_MAX_CALLS_HOURLY", strconv.Itoa(l.MaxCallsHourly))
+        }
+        if l.MaxCallsDaily > 0 {
+            setIfEmpty("NOFX_MAX_CALLS_DAILY", strconv.Itoa(l.MaxCallsDaily))
+        }
+        if l.SymbolMinIntervalMin > 0 {
+            setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", strconv.Itoa(l.SymbolMinIntervalMin))
+        }
+        if l.GlobalMaxPerScan >= 0 {
+            setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", strconv.Itoa(l.GlobalMaxPerScan))
+        }
+        if l.Temperature >= 0 {
+            setIfEmpty("AI_TEMPERATURE", fmt.Sprintf("%.2f", l.Temperature))
+        }
+    }
+    if t := cfg.TradingThresholds; t != nil {
+        if t.AbsProfitMinUSD > 0 {
+            setIfEmpty("NOFX_ABS_PROFIT_MIN_USD", fmt.Sprintf("%.2f", t.AbsProfitMinUSD))
+        }
+        if t.ProfitFeeMultiplier > 0 {
+            setIfEmpty("NOFX_PROFIT_FEE_MULTIPLIER", fmt.Sprintf("%.1f", t.ProfitFeeMultiplier))
+        }
+    }
 }
 
 // syncConfigToDatabase 将配置同步到数据库
@@ -202,6 +329,12 @@ func main() {
 
     // 应用 HTTP/HTTPS 代理（如在受限网络环境）
     if cfg := configFile; cfg != nil {
+        // 应用风险档位（仅在相关 env 未设置时生效）
+        if cfg.Profile != "" {
+            applyLLMProfile(cfg.Profile)
+        }
+        // 应用 llm 与交易阈值（config 为主，env 作为覆盖）
+        applyLLMFromConfig(cfg)
         // 优先使用 config.json 中的代理设置；若为空则不覆盖环境变量
         if cfg.HTTPProxy != "" {
             _ = os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
@@ -294,6 +427,25 @@ func main() {
 	if useDefaultCoins {
 		log.Printf("✓ 已启用默认主流币种列表")
 	}
+
+	// 启动打印档位与关键阈值摘要（便于审计）
+	profile := ""
+	if configFile != nil {
+		profile = configFile.Profile
+	}
+	log.Printf("🎚️  当前 Profile: %s | 预检: enabled=%s opp_min=%s ema_prox=%s symbol_min_interval_min=%s allow_per_scan=%s | temp=%s",
+		profile,
+		func() string { if os.Getenv("NOFX_PRECHECK_ENABLED") == "0" || strings.ToLower(os.Getenv("NOFX_PRECHECK_ENABLED"))=="false" { return "false" }; return "true" }(),
+		os.Getenv("NOFX_OPP_SCORE_MIN"),
+		os.Getenv("NOFX_EMA_PROX_PCT"),
+		os.Getenv("NOFX_SYMBOL_MIN_INTERVAL_MIN"),
+		os.Getenv("NOFX_GLOBAL_MAX_PER_SCAN"),
+		os.Getenv("AI_TEMPERATURE"),
+	)
+	log.Printf("🛡️  交易阈值: abs_profit_min_usd=%s profit_fee_multiplier=%s",
+		os.Getenv("NOFX_ABS_PROFIT_MIN_USD"),
+		os.Getenv("NOFX_PROFIT_FEE_MULTIPLIER"),
+	)
 
 	// 设置币种池API URL
 	coinPoolAPIURL, _ := database.GetSystemConfig("coin_pool_api_url")

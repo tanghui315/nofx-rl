@@ -45,7 +45,7 @@ func NewPromptManager() *PromptManager {
 	}
 }
 
-// LoadTemplates 从指定目录加载所有提示词模板
+// LoadTemplates 从指定目录（递归）加载所有 .txt 模板
 func (pm *PromptManager) LoadTemplates(dir string) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -55,39 +55,36 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 		return fmt.Errorf("提示词目录不存在: %s", dir)
 	}
 
-	// 扫描目录中的所有 .txt 文件
-	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	var count int
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".txt" {
+			return nil
+		}
+		content, rerr := os.ReadFile(path)
+		if rerr != nil {
+			log.Printf("⚠️  读取提示词文件失败 %s: %v", path, rerr)
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		key := strings.TrimSuffix(rel, filepath.Ext(rel)) // 子路径作为键，如 pullback_ema/prompt_pullback_ema
+		key = filepath.ToSlash(key)
+		pm.templates[key] = &PromptTemplate{Name: key, Content: string(content)}
+		count++
+		log.Printf("  📄 加载提示词模板: %s (%s)", key, rel)
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("扫描提示词目录失败: %w", err)
 	}
-
-	if len(files) == 0 {
+	if count == 0 {
 		log.Printf("⚠️  提示词目录 %s 中没有找到 .txt 文件", dir)
-		return nil
 	}
-
-	// 加载每个模板文件
-	for _, file := range files {
-		// 读取文件内容
-		content, err := os.ReadFile(file)
-		if err != nil {
-			log.Printf("⚠️  读取提示词文件失败 %s: %v", file, err)
-			continue
-		}
-
-		// 提取文件名（不含扩展名）作为模板名称
-		fileName := filepath.Base(file)
-		templateName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-
-		// 存储模板
-		pm.templates[templateName] = &PromptTemplate{
-			Name:    templateName,
-			Content: string(content),
-		}
-
-		log.Printf("  📄 加载提示词模板: %s (%s)", templateName, fileName)
-	}
-
 	return nil
 }
 

@@ -17,6 +17,11 @@ type Trader interface {
 	// OpenShort 开空仓
 	OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error)
 
+	// OpenLongLimit 开多（限价）
+	OpenLongLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error)
+	// OpenShortLimit 开空（限价）
+	OpenShortLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error)
+
 	// CloseLong 平多仓（quantity=0表示全部平仓）
 	CloseLong(symbol string, quantity float64) (map[string]interface{}, error)
 
@@ -57,6 +62,11 @@ type Trader interface {
     // positionSide: "LONG" 或 "SHORT"（某些交易所可能不区分，返回符号维度的价格）
     // 返回：stopLoss, takeProfit（不存在时为0）
     GetStopTakePrices(symbol string, positionSide string) (float64, float64, error)
+
+    // ListOpenOrders 列出未完成订单（用于限价生命周期）
+    ListOpenOrders(symbol string) ([]map[string]interface{}, error)
+    // CancelOrder 取消指定订单
+    CancelOrder(symbol string, orderId int64) error
 }
 
 // StdUMTrade 标准化的交易填充（统一账户/合约）

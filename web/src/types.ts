@@ -64,6 +64,7 @@ export interface AccountSnapshot {
 }
 
 export interface DecisionRecord {
+  source?: string
   timestamp: string
   cycle_number: number
   input_prompt: string

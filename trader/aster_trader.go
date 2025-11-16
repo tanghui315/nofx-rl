@@ -866,6 +866,38 @@ func (t *AsterTrader) CloseShort(symbol string, quantity float64) (map[string]in
 	return result, nil
 }
 
+// OpenLongLimit 开多（限价）- 直接复用 OpenLong（该实现本身使用 LIMIT）
+func (t *AsterTrader) OpenLongLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error) {
+	// 当前实现的 OpenLong 使用 LIMIT 近似市价逻辑，这里仍调用 OpenLong 以保持一致
+	return t.OpenLong(symbol, quantity, leverage)
+}
+
+// OpenShortLimit 开空（限价）- 直接复用 OpenShort
+func (t *AsterTrader) OpenShortLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error) {
+	return t.OpenShort(symbol, quantity, leverage)
+}
+
+// ListOpenOrders 简化实现（调用 /fapi/v3/openOrders）
+func (t *AsterTrader) ListOpenOrders(symbol string) ([]map[string]interface{}, error) {
+	params := map[string]interface{}{"symbol": symbol}
+	body, err := t.request("GET", "/fapi/v3/openOrders", params)
+	if err != nil {
+		return nil, err
+	}
+	var arr []map[string]interface{}
+	if err := json.Unmarshal(body, &arr); err != nil {
+		return nil, err
+	}
+	return arr, nil
+}
+
+// CancelOrder 取消指定订单（/fapi/v3/order DELETE）
+func (t *AsterTrader) CancelOrder(symbol string, orderId int64) error {
+	params := map[string]interface{}{"symbol": symbol, "orderId": orderId}
+	_, err := t.request("DELETE", "/fapi/v3/order", params)
+	return err
+}
+
 // SetMarginMode 设置仓位模式
 func (t *AsterTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 	// Aster支持仓位模式设置

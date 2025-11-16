@@ -952,6 +952,44 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 	return nil
 }
 
+// ListOpenOrders 列出未完成订单
+func (t *FuturesTrader) ListOpenOrders(symbol string) ([]map[string]interface{}, error) {
+	orders, err := t.client.NewListOpenOrdersService().
+		Symbol(symbol).
+		Do(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("获取未完成订单失败: %w", err)
+	}
+	var out []map[string]interface{}
+	for _, o := range orders {
+		item := map[string]interface{}{
+			"orderId":    o.OrderID,
+			"symbol":     o.Symbol,
+			"status":     o.Status,
+			"type":       o.Type,
+			"side":       o.Side,
+			"price":      o.Price,
+			"origQty":    o.OrigQuantity,
+			"executedQty": o.ExecutedQuantity,
+			"updateTime": o.UpdateTime,
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// CancelOrder 取消指定订单
+func (t *FuturesTrader) CancelOrder(symbol string, orderId int64) error {
+	_, err := t.client.NewCancelOrderService().
+		Symbol(symbol).
+		OrderID(orderId).
+		Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("取消订单失败: %w", err)
+	}
+	return nil
+}
+
 // GetMinNotional 获取最小名义价值（从交易规则查询，失败时回退到保守默认值）
 func (t *FuturesTrader) GetMinNotional(symbol string) float64 {
 	// 回退默认值（多数山寨的常见门槛），BTC/ETH 通常更高（如 100）
@@ -1135,6 +1173,124 @@ func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string,
 	}
 
 	return fmt.Sprintf("%.*f", precision, rounded), nil
+}
+
+// formatPrice 使用 PRICE_FILTER.tickSize 向下取整价格
+func (t *FuturesTrader) formatPrice(symbol string, price float64) (string, error) {
+	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("获取交易规则失败: %w", err)
+	}
+	tick := 0.0
+	precision := 2
+	for _, s := range exchangeInfo.Symbols {
+		if s.Symbol == symbol {
+			for _, filter := range s.Filters {
+				if filter["filterType"] == "PRICE_FILTER" {
+					if ts, ok := filter["tickSize"].(string); ok {
+						if v, e := strconv.ParseFloat(ts, 64); e == nil && v > 0 {
+							tick = v
+							precision = calculatePrecision(ts)
+						}
+					}
+					break
+				}
+			}
+			break
+		}
+	}
+	if tick <= 0 {
+		// 回退：使用当前价格的 2 位小数
+		return fmt.Sprintf("%.2f", price), nil
+	}
+	steps := math.Floor(price/tick + 1e-12)
+	rounded := steps * tick
+	return fmt.Sprintf("%.*f", precision, rounded), nil
+}
+
+// OpenLongLimit 开多（限价）
+func (t *FuturesTrader) OpenLongLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error) {
+	// 取消旧委托
+	_ = t.CancelAllOrders(symbol)
+	if err := t.SetLeverage(symbol, leverage); err != nil {
+		return nil, err
+	}
+	qtyStr, err := t.FormatQuantity(symbol, quantity)
+	if err != nil {
+		return nil, err
+	}
+	qtyFloat, _ := strconv.ParseFloat(qtyStr, 64)
+	if qtyFloat <= 0 {
+		return nil, fmt.Errorf("开仓数量过小，格式化后为0")
+	}
+	if err := t.CheckMinNotional(symbol, qtyFloat); err != nil {
+		return nil, err
+	}
+	priceStr, err := t.formatPrice(symbol, limitPrice)
+	if err != nil {
+		return nil, err
+	}
+	order, err := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(futures.SideTypeBuy).
+		PositionSide(futures.PositionSideTypeLong).
+		Type(futures.OrderTypeLimit).
+		TimeInForce(futures.TimeInForceTypeGTC).
+		Price(priceStr).
+		Quantity(qtyStr).
+		NewClientOrderID(getBrOrderID()).
+		Do(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("限价开多失败: %w", err)
+	}
+	result := map[string]interface{}{
+		"orderId": order.OrderID,
+		"symbol":  order.Symbol,
+		"status":  order.Status,
+	}
+	return result, nil
+}
+
+// OpenShortLimit 开空（限价）
+func (t *FuturesTrader) OpenShortLimit(symbol string, quantity float64, leverage int, limitPrice float64) (map[string]interface{}, error) {
+	_ = t.CancelAllOrders(symbol)
+	if err := t.SetLeverage(symbol, leverage); err != nil {
+		return nil, err
+	}
+	qtyStr, err := t.FormatQuantity(symbol, quantity)
+	if err != nil {
+		return nil, err
+	}
+	qtyFloat, _ := strconv.ParseFloat(qtyStr, 64)
+	if qtyFloat <= 0 {
+		return nil, fmt.Errorf("开仓数量过小，格式化后为0")
+	}
+	if err := t.CheckMinNotional(symbol, qtyFloat); err != nil {
+		return nil, err
+	}
+	priceStr, err := t.formatPrice(symbol, limitPrice)
+	if err != nil {
+		return nil, err
+	}
+	order, err := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(futures.SideTypeSell).
+		PositionSide(futures.PositionSideTypeShort).
+		Type(futures.OrderTypeLimit).
+		TimeInForce(futures.TimeInForceTypeGTC).
+		Price(priceStr).
+		Quantity(qtyStr).
+		NewClientOrderID(getBrOrderID()).
+		Do(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("限价开空失败: %w", err)
+	}
+	result := map[string]interface{}{
+		"orderId": order.OrderID,
+		"symbol":  order.Symbol,
+		"status":  order.Status,
+	}
+	return result, nil
 }
 
 // 辅助函数

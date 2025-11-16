@@ -59,6 +59,69 @@ export const api = {
     return res.json()
   },
 
+  // Dev: regime/opportunities（调试）
+  async devGetRegime(params: { traderId: string; symbols: string[]; includeNews?: boolean; emaProxPct?: number }): Promise<any> {
+    const qs = new URLSearchParams()
+    if (params.symbols?.length) qs.set('symbols', params.symbols.join(','))
+    if (params.includeNews) qs.set('include_news', '1')
+    if (params.emaProxPct) qs.set('ema_prox_pct', String(params.emaProxPct))
+    const res = await fetch(`${API_BASE}/dev/regime?${qs.toString()}`, { headers: getAuthHeaders() })
+    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (!res.ok) throw new Error('获取Regime失败')
+    return res.json()
+  },
+
+  // Dev: losses（调试）
+  async devGetLosses(params: { traderId: string; symbols?: string[]; lookback?: number; limit?: number; includeCtx?: boolean }): Promise<any> {
+    const qs = new URLSearchParams()
+    qs.set('trader_id', params.traderId)
+    if (params.symbols?.length) qs.set('symbols', params.symbols.join(','))
+    if (params.lookback) qs.set('lookback', String(params.lookback))
+    if (params.limit) qs.set('limit', String(params.limit))
+    if (params.includeCtx) qs.set('include_ctx', '1')
+    const res = await fetch(`${API_BASE}/dev/losses?${qs.toString()}`, { headers: getAuthHeaders() })
+    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (!res.ok) throw new Error('获取亏损列表失败')
+    return res.json()
+  },
+
+  // Dev: metrics
+  async devGetMetrics(traderId: string): Promise<any> {
+    const qs = new URLSearchParams()
+    qs.set('trader_id', traderId)
+    const res = await fetch(`${API_BASE}/dev/metrics?${qs.toString()}`, { headers: getAuthHeaders() })
+    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (!res.ok) throw new Error('获取Metrics失败')
+    return res.json()
+  },
+
+  // Dev: open_orders/pending_limits
+  async devGetOpenOrders(traderId: string, symbol: string): Promise<any> {
+    const qs = new URLSearchParams()
+    qs.set('trader_id', traderId)
+    qs.set('symbol', symbol)
+    const res = await fetch(`${API_BASE}/dev/open_orders?${qs.toString()}`, { headers: getAuthHeaders() })
+    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (!res.ok) throw new Error('获取open_orders失败')
+    return res.json()
+  },
+  async devGetPendingLimits(traderId: string): Promise<any> {
+    const qs = new URLSearchParams()
+    qs.set('trader_id', traderId)
+    const res = await fetch(`${API_BASE}/dev/pending_limits?${qs.toString()}`, { headers: getAuthHeaders() })
+    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (!res.ok) throw new Error('获取pending_limits失败')
+    return res.json()
+  },
+  async devCancelOrder(traderId: string, symbol: string, orderId: number): Promise<void> {
+    const res = await fetch(`${API_BASE}/dev/cancel_order`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ trader_id: traderId, symbol, order_id: orderId }),
+    })
+    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (!res.ok) throw new Error('取消订单失败')
+  },
   // News (cached)
   async getNews(symbol: string, limit = 5): Promise<NewsItem[]> {
     const params = new URLSearchParams({ symbol, limit: String(limit) })

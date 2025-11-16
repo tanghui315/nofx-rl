@@ -21,13 +21,21 @@ type DecisionRecord struct {
 	InputPrompt    string             `json:"input_prompt"`    // 发送给AI的输入prompt
 	CoTTrace       string             `json:"cot_trace"`       // AI思维链（输出）
 	DecisionJSON   string             `json:"decision_json"`   // 决策JSON
-	AccountState   AccountSnapshot    `json:"account_state"`   // 账户状态快照
-	Positions      []PositionSnapshot `json:"positions"`       // 持仓快照
-	CandidateCoins []string           `json:"candidate_coins"` // 候选币种列表
-	Decisions      []DecisionAction   `json:"decisions"`       // 执行的决策
+    AccountState   AccountSnapshot    `json:"account_state"`   // 账户状态快照
+    Positions      []PositionSnapshot `json:"positions"`       // 持仓快照
+    CandidateCoins []string           `json:"candidate_coins"` // 候选币种列表
+    Decisions      []DecisionAction   `json:"decisions"`       // 执行的决策
 	ExecutionLog   []string           `json:"execution_log"`   // 执行日志
 	Success        bool               `json:"success"`         // 是否成功
 	ErrorMessage   string             `json:"error_message"`   // 错误信息（如果有）
+	// 观测与路由（可选）
+	RegimeType        string                 `json:"regime_type,omitempty"`
+	RegimeConfidence  int                    `json:"regime_confidence,omitempty"`
+	Route             string                 `json:"route,omitempty"`
+	RouteTemplate     string                 `json:"route_template,omitempty"`
+	RouteConstraints  map[string]interface{} `json:"route_constraints,omitempty"`
+	PreCheckAllowed   []string               `json:"precheck_allowed,omitempty"`
+	PreCheckReasons   []string               `json:"precheck_reasons,omitempty"`
 }
 
 // SetSource 兼容性辅助：允许外部通过接口方式设置来源
