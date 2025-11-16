@@ -27,6 +27,22 @@
   "http_proxy": "http://127.0.0.1:1087",
   "https_proxy": "http://127.0.0.1:1087",
   "no_proxy": "localhost,127.0.0.1",
+  "llm": {
+    "event_mode": true,
+    "opp_score_min": 8,
+    "ema_prox_pct": 0.4,
+    "oi_delta_pct": 5,
+    "bb_bw_min": 2.0,
+    "max_calls_hourly": 10,
+    "max_calls_daily": 200,
+    "symbol_min_interval_min": 10,
+    "global_max_per_scan": 1,
+    "temperature": 0.0
+  },
+  "trading_thresholds": {
+    "abs_profit_min_usd": 1.5,
+    "profit_fee_multiplier": 5
+  },
   "news": [
     {
       "provider": "telegram",
