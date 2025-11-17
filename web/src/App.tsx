@@ -140,7 +140,14 @@ function App() {
   }
 
   const [currentPage, setCurrentPage] = useState<Page>(getInitialPage())
-  const [selectedTraderId, setSelectedTraderId] = useState<string | undefined>()
+  const [selectedTraderId, setSelectedTraderId] = useState<string | undefined>(() => {
+    if (typeof window === 'undefined') return undefined
+    try {
+      return localStorage.getItem('selected_trader_id') || undefined
+    } catch {
+      return undefined
+    }
+  })
   const [lastUpdate, setLastUpdate] = useState<string>('--:--:--')
 
   // 监听URL变化，同步页面状态
@@ -192,12 +199,29 @@ function App() {
     }
   )
 
-  // 当获取到traders后，设置默认选中第一个
+  // 当获取到traders后，设置默认选中（优先使用持久化的 selectedTraderId）
   useEffect(() => {
-    if (traders && traders.length > 0 && !selectedTraderId) {
+    if (!traders || traders.length === 0) return
+    // 如果当前选中ID不存在于最新列表中，则回退到第一个
+    const exists =
+      selectedTraderId &&
+      traders.some((t) => t.trader_id === selectedTraderId)
+    if (!exists) {
       setSelectedTraderId(traders[0].trader_id)
     }
   }, [traders, selectedTraderId])
+
+  // 持久化 selectedTraderId，支持刷新后保持选中 trader
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      if (selectedTraderId) {
+        localStorage.setItem('selected_trader_id', selectedTraderId)
+      }
+    } catch {
+      // 忽略本地存储错误
+    }
+  }, [selectedTraderId])
 
   // 如果在trader页面，获取该trader的数据
   const { data: status } = useSWR<SystemStatus>(
@@ -618,6 +642,7 @@ function TraderDetailsPage({
   traders,
   selectedTraderId,
   onTraderSelect,
+  systemProfile,
 }: {
   selectedTrader?: TraderInfo
   traders?: TraderInfo[]
@@ -634,8 +659,8 @@ function TraderDetailsPage({
 }) {
   const [profile, setProfile] = useState(systemProfile || 'balanced')
   const { data: devPendingLimits } = useSWR<any>(
-    selectedTrader ? `dev-pending-${selectedTrader.trader_id}` : null,
-    () => api.devGetPendingLimits(selectedTrader!.trader_id),
+    selectedTrader ? `pending-${selectedTrader.trader_id}` : null,
+    () => api.getTraderPendingLimits(selectedTrader!.trader_id),
     {
       refreshInterval: 30000,
       revalidateOnFocus: false,
@@ -644,7 +669,7 @@ function TraderDetailsPage({
   )
   const { data: devRegime } = useSWR<any>(
     selectedTrader ? `dev-regime-btc-${selectedTrader.trader_id}` : null,
-    () => api.devGetRegime({ traderId: selectedTrader!.trader_id, symbols: ['BTCUSDT'], includeNews: true }),
+    () => api.getMarketRegime({ symbols: ['BTCUSDT'], includeNews: true }),
     {
       refreshInterval: 60000,
       revalidateOnFocus: false,

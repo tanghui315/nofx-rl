@@ -2211,6 +2211,16 @@ func (at *AutoTrader) GetID() string {
 	return at.id
 }
 
+// ListOpenOrders 代理底层交易器列出未完成订单（调试用）
+func (at *AutoTrader) ListOpenOrders(symbol string) ([]map[string]interface{}, error) {
+	return at.trader.ListOpenOrders(symbol)
+}
+
+// CancelOrder 代理底层交易器取消订单（调试用）
+func (at *AutoTrader) CancelOrder(symbol string, orderID int64) error {
+	return at.trader.CancelOrder(symbol, orderID)
+}
+
 // GetPendingLimits 返回当前挂着的限价开仓快照（仅用于调试/观察）
 func (at *AutoTrader) GetPendingLimits() []map[string]interface{} {
 	out := []map[string]interface{}{}

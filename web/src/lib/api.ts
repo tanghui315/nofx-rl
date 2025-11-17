@@ -59,6 +59,23 @@ export const api = {
     return res.json()
   },
 
+  // 市场 Regime / 机会分（正式路由，供主界面使用）
+  async getMarketRegime(params: { symbols: string[]; includeNews?: boolean; emaProxPct?: number }): Promise<any> {
+    const qs = new URLSearchParams()
+    if (params.symbols?.length) qs.set('symbols', params.symbols.join(','))
+    if (params.includeNews) qs.set('include_news', '1')
+    if (params.emaProxPct) qs.set('ema_prox_pct', String(params.emaProxPct))
+    const res = await fetch(`${API_BASE}/market/regime?${qs.toString()}`, {
+      headers: getAuthHeaders(),
+    })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
+    if (!res.ok) throw new Error('获取市场 Regime 失败')
+    return res.json()
+  },
+
   // Dev: regime/opportunities（调试）
   async devGetRegime(params: { traderId: string; symbols: string[]; includeNews?: boolean; emaProxPct?: number }): Promise<any> {
     const qs = new URLSearchParams()
@@ -66,7 +83,10 @@ export const api = {
     if (params.includeNews) qs.set('include_news', '1')
     if (params.emaProxPct) qs.set('ema_prox_pct', String(params.emaProxPct))
     const res = await fetch(`${API_BASE}/dev/regime?${qs.toString()}`, { headers: getAuthHeaders() })
-    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    // dev 路由的 401 很可能是缺少 REPLAY_TOKEN，而不是登录过期
+    if (res.status === 401) {
+      throw new Error('dev/regime 未授权（可能缺少 REPLAY_TOKEN）')
+    }
     if (!res.ok) throw new Error('获取Regime失败')
     return res.json()
   },
@@ -80,7 +100,9 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.includeCtx) qs.set('include_ctx', '1')
     const res = await fetch(`${API_BASE}/dev/losses?${qs.toString()}`, { headers: getAuthHeaders() })
-    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (res.status === 401) {
+      throw new Error('dev/losses 未授权（可能缺少 REPLAY_TOKEN）')
+    }
     if (!res.ok) throw new Error('获取亏损列表失败')
     return res.json()
   },
@@ -90,7 +112,9 @@ export const api = {
     const qs = new URLSearchParams()
     qs.set('trader_id', traderId)
     const res = await fetch(`${API_BASE}/dev/metrics?${qs.toString()}`, { headers: getAuthHeaders() })
-    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (res.status === 401) {
+      throw new Error('dev/metrics 未授权（可能缺少 REPLAY_TOKEN）')
+    }
     if (!res.ok) throw new Error('获取Metrics失败')
     return res.json()
   },
@@ -101,7 +125,9 @@ export const api = {
     qs.set('trader_id', traderId)
     qs.set('symbol', symbol)
     const res = await fetch(`${API_BASE}/dev/open_orders?${qs.toString()}`, { headers: getAuthHeaders() })
-    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (res.status === 401) {
+      throw new Error('dev/open_orders 未授权（可能缺少 REPLAY_TOKEN）')
+    }
     if (!res.ok) throw new Error('获取open_orders失败')
     return res.json()
   },
@@ -109,8 +135,24 @@ export const api = {
     const qs = new URLSearchParams()
     qs.set('trader_id', traderId)
     const res = await fetch(`${API_BASE}/dev/pending_limits?${qs.toString()}`, { headers: getAuthHeaders() })
-    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (res.status === 401) {
+      throw new Error('dev/pending_limits 未授权（可能缺少 REPLAY_TOKEN）')
+    }
     if (!res.ok) throw new Error('获取pending_limits失败')
+    return res.json()
+  },
+  // 正式路由：当前 trader 的挂单快照
+  async getTraderPendingLimits(traderId: string): Promise<any> {
+    const qs = new URLSearchParams()
+    qs.set('trader_id', traderId)
+    const res = await fetch(`${API_BASE}/trader/pending_limits?${qs.toString()}`, {
+      headers: getAuthHeaders(),
+    })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
+    if (!res.ok) throw new Error('获取挂单快照失败')
     return res.json()
   },
   async devCancelOrder(traderId: string, symbol: string, orderId: number): Promise<void> {
@@ -119,7 +161,9 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify({ trader_id: traderId, symbol, order_id: orderId }),
     })
-    if (res.status === 401) { handleUnauthorized(); throw new Error('登录已过期，请重新登录') }
+    if (res.status === 401) {
+      throw new Error('dev/cancel_order 未授权（可能缺少 REPLAY_TOKEN）')
+    }
     if (!res.ok) throw new Error('取消订单失败')
   },
   // News (cached)

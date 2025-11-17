@@ -177,6 +177,14 @@ func (s *Server) setupRoutes() {
 			// 新闻调试接口（受保护）
 			protected.GET("/news", s.handleGetNews)
 
+			// 市场分型 & 机会分（正式路由，供前端展示用）
+			// GET /api/market/regime?symbols=BTCUSDT,ETHUSDT&ema_prox_pct=0.4&include_news=1
+			protected.GET("/market/regime", s.handleMarketRegime)
+
+			// 当前交易员的限价挂单快照（正式路由，供前端展示用）
+			// GET /api/trader/pending_limits?trader_id=xxx
+			protected.GET("/trader/pending_limits", s.handleTraderPendingLimits)
+
 			// 开发专用（通过构建标签 dev 控制的增强路由）
 			augmentRoutes(s, api, protected)
 		}
@@ -1882,6 +1890,143 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		c.Set("email", claims.Email)
 		c.Next()
 	}
+}
+
+// handleMarketRegime 返回市场分型与机会分（正式路由，供前端展示）
+// GET /api/market/regime?symbols=BTCUSDT,ETHUSDT&ema_prox_pct=0.4&include_news=1
+func (s *Server) handleMarketRegime(c *gin.Context) {
+	emaProxPct := 0.4
+	if v := c.Query("ema_prox_pct"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			emaProxPct = f
+		}
+	}
+	includeNews := c.Query("include_news") == "1"
+
+	// 收集符号
+	var symbols []string
+	if qs := c.Query("symbols"); qs != "" {
+		for _, p := range strings.Split(qs, ",") {
+			p = strings.ToUpper(strings.TrimSpace(p))
+			if p != "" {
+				symbols = append(symbols, p)
+			}
+		}
+	}
+	if len(symbols) == 0 {
+		symbols = []string{"BTCUSDT"}
+	}
+
+	// 拉取数据
+	mdMap := map[string]*market.Data{}
+	for _, sym := range symbols {
+		if d, err := market.Get(sym); err == nil {
+			mdMap[sym] = d
+		}
+	}
+
+	// Regime（以 BTCUSDT 优先）
+	regime := decision.DetectRegime(mdMap)
+
+	// 机会评分 + 证据
+	type oppOut struct {
+		Symbol   string                   `json:"symbol"`
+		Opp      decision.SimpleOppResult `json:"opp"`
+		Snapshot map[string]interface{}   `json:"snapshot,omitempty"`
+		Evidence map[string]interface{}   `json:"evidence,omitempty"`
+		News     []map[string]interface{} `json:"news,omitempty"`
+	}
+
+	var opps []oppOut
+	for sym, d := range mdMap {
+		opp := decision.ComputeSimpleOpportunityScore(d, emaProxPct)
+		snap := map[string]interface{}{
+			"price":        d.CurrentPrice,
+			"ema20_3m":     d.CurrentEMA20,
+			"macd_3m":      d.CurrentMACD,
+			"rsi7_3m":      d.CurrentRSI7,
+			"funding_rate": d.FundingRate,
+			"atr_3m": func() float64 {
+				if d.IntradaySeries != nil {
+					return d.IntradaySeries.ATR14
+				}
+				return 0
+			}(),
+			"bb_bandwidth_3m": func() float64 {
+				if d.BollingerBands != nil {
+					return d.BollingerBands.BandWidth
+				}
+				return 0
+			}(),
+			"oi_latest": func() float64 {
+				if d.OpenInterest != nil {
+					return d.OpenInterest.Latest
+				}
+				return 0
+			}(),
+			"oi_average": func() float64 {
+				if d.OpenInterest != nil {
+					return d.OpenInterest.Average
+				}
+				return 0
+			}(),
+		}
+		ev := map[string]interface{}{}
+		if d.ADX != nil {
+			ev["adx_4h"] = d.ADX.ADX
+			ev["+di"] = d.ADX.PlusDI
+			ev["-di"] = d.ADX.MinusDI
+		}
+		if d.Ichimoku != nil {
+			ev["ichimoku_cloud_color"] = d.Ichimoku.CloudColor
+			ev["ichimoku_price_pos"] = d.Ichimoku.PricePosition
+		}
+		var newsArr []map[string]interface{}
+		if includeNews {
+			items, _ := news.Latest(sym, 3)
+			for _, it := range items {
+				newsArr = append(newsArr, map[string]interface{}{
+					"title":        it.Title,
+					"source":       it.Source,
+					"published_at": it.PublishedAt,
+				})
+			}
+		}
+		o := oppOut{Symbol: sym, Opp: opp, Snapshot: snap}
+		if len(ev) > 0 {
+			o.Evidence = ev
+		}
+		if len(newsArr) > 0 {
+			o.News = newsArr
+		}
+		opps = append(opps, o)
+	}
+
+	// BTC NewsScore（全局）
+	ns := news.Score("BTCUSDT", 24*time.Hour)
+	c.JSON(http.StatusOK, gin.H{
+		"regime":         regime,
+		"ema_prox_pct":   emaProxPct,
+		"symbols":        symbols,
+		"opportunities":  opps,
+		"news_score_btc": ns.Score,
+	})
+}
+
+// handleTraderPendingLimits 返回当前交易员的限价挂单快照
+// GET /api/trader/pending_limits?trader_id=xxx
+func (s *Server) handleTraderPendingLimits(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	tr, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pending_limits": tr.GetPendingLimits()})
 }
 
 // handleAdminLogin 管理员登录（密码仅来自环境变量）
