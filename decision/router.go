@@ -37,8 +37,8 @@ type RouteResult struct {
 // - 趋势晚期/震荡 → no_trade 或 range_grid（保守）
 func RouteStrategy(regime Regime, accountEquity float64, smallCapital bool) RouteResult {
 	res := RouteResult{
-		Route:       RouteNoTrade,
-		TemplatePath: "prompts/adaptive_moderate_hist_v6_3.txt", // 先复用基座
+		Route:        RouteNoTrade,
+		TemplatePath: "adaptive_moderate_hist_v6_3", // 默认使用平衡基座
 		Constraints: RouteConstraints{
 			RRMin:            3.0,
 			LeverageMax:      5,
@@ -57,21 +57,24 @@ func RouteStrategy(regime Regime, accountEquity float64, smallCapital bool) Rout
 	case RegimeTrendEarly, RegimeTrendMid:
 		if smallCapital {
 			res.Route = RoutePullbackEMA
-			// 仍先使用基座模板，后续切换到 prompts/pullback_ema/prompt_pullback_ema.txt
+			res.TemplatePath = "pullback_ema/prompt_pullback_ema"
 			res.Constraints.DefaultOrderType = "limit"
 			res.Constraints.RRMin = 3.5
 			res.Agent = true // 小资金 + 回抽结构，优先使用 ReAct-lite 工具化执行
 		} else {
 			res.Route = RouteTrendCarry
+			res.TemplatePath = "trend_carry/prompt_trend_carry"
 			res.Constraints.RRMin = 3.0
 			res.Constraints.DefaultOrderType = "market"
 			res.Agent = false
 		}
 	case RegimeTrendLate:
 		res.Route = RouteNoTrade
+		res.TemplatePath = "adaptive_moderate_hist_v6_3"
 		res.Agent = false
 	case RegimeRange:
 		res.Route = RouteRangeGrid
+		res.TemplatePath = "range_grid/prompt_range_grid"
 		res.Constraints.DefaultOrderType = "limit"
 		res.Agent = false
 	}

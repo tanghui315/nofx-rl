@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"sort"
 	"nofx/decision"
 	"nofx/decision/agent"
 	"nofx/logger"
@@ -14,6 +13,7 @@ import (
 	"nofx/news"
 	"nofx/pool"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,24 +118,32 @@ type AutoTrader struct {
 	// PreCheck 去抖：记录上次对某 symbol 唤起 LLM 的时间
 	lastLLMCallPerSymbol map[string]time.Time
 	// 限价挂单生命周期管理
-	pendingLimits        map[int64]*LimitPending // orderId -> pending
-	metrics              Metrics                 // 运行期观测指标
-	lastSLUpdate         map[string]time.Time    // SL更新节流（symbol_side）
+	pendingLimits map[int64]*LimitPending     // orderId -> pending
+	metrics       Metrics                     // 运行期观测指标
+	lastSLUpdate  map[string]time.Time        // SL/PM 更新节流（symbol_side）
+	pmState       map[string]*PositionPMState // PositionManager 状态（symbol_side）
 }
 
 // LimitPending 记录限价开仓的挂单与到期、待设置SL/TP等
 type LimitPending struct {
-	OrderID     int64
-	Symbol      string
-	Action      string  // open_long | open_short
-	Quantity    float64
-	LimitPrice  float64
-	Leverage    int
-	StopLoss    float64
-	TakeProfit  float64
-	ExpireAt    time.Time
-	CreatedAt   time.Time
+	OrderID      int64
+	Symbol       string
+	Action       string // open_long | open_short
+	Quantity     float64
+	LimitPrice   float64
+	Leverage     int
+	StopLoss     float64
+	TakeProfit   float64
+	ExpireAt     time.Time
+	CreatedAt    time.Time
 	PartialNoted bool
+}
+
+// PositionPMState 记录 PositionManager 状态（用于分批/结构化退出节流）
+type PositionPMState struct {
+	EntryPrice     float64   // 入场价（用于识别新仓位并重置状态）
+	Phase          int       // 0: 初始；1: 完成第一次分批；2: 完成第二次分批；3: 已规则化退出
+	LastActionTime time.Time // 最近一次 PM 行为时间（分批/平仓）
 }
 
 // Metrics 运行期观测指标（简化）
@@ -168,21 +176,45 @@ func (m *Metrics) incReason(reason string) {
 func (m *Metrics) snapshot(pending int) map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	totalPrecheck := m.PrecheckAllowed + m.PrecheckDenied
+	precheckAllowRate := 0.0
+	if totalPrecheck > 0 {
+		precheckAllowRate = float64(m.PrecheckAllowed) / float64(totalPrecheck)
+	}
+	totalDecisions := m.DecisionsExecuted + m.DecisionsFailed
+	effectiveDecisionRate := 0.0
+	if totalDecisions > 0 {
+		effectiveDecisionRate = float64(m.DecisionsExecuted) / float64(totalDecisions)
+	}
+	topReason := ""
+	topReasonCount := 0
+	for k, v := range m.PrecheckReasons {
+		if v > topReasonCount {
+			topReason = k
+			topReasonCount = v
+		}
+	}
 	return map[string]interface{}{
-		"precheck_allowed":    m.PrecheckAllowed,
-		"precheck_denied":     m.PrecheckDenied,
-		"precheck_reasons":    m.PrecheckReasons,
-		"agent_calls":         m.AgentCalls,
-		"llm_calls":           m.LLMCalls,
-		"decisions_executed":  m.DecisionsExecuted,
-		"decisions_failed":    m.DecisionsFailed,
-		"limit_pending":       pending,
-		"limit_placed":        m.LimitPlaced,
-		"limit_expired":       m.LimitExpired,
-		"limit_filled":        m.LimitFilled,
-		"limit_partial":       m.LimitPartial,
-		"limit_canceled":      m.LimitCanceled,
-		"last_updated":        m.LastUpdated,
+		"precheck_allowed":          m.PrecheckAllowed,
+		"precheck_denied":           m.PrecheckDenied,
+		"precheck_total":            totalPrecheck,
+		"precheck_allow_rate":       precheckAllowRate,
+		"precheck_reasons":          m.PrecheckReasons,
+		"precheck_top_reason":       topReason,
+		"precheck_top_reason_count": topReasonCount,
+		"agent_calls":               m.AgentCalls,
+		"llm_calls":                 m.LLMCalls,
+		"decisions_executed":        m.DecisionsExecuted,
+		"decisions_failed":          m.DecisionsFailed,
+		"decisions_total":           totalDecisions,
+		"effective_decision_rate":   effectiveDecisionRate,
+		"limit_pending":             pending,
+		"limit_placed":              m.LimitPlaced,
+		"limit_expired":             m.LimitExpired,
+		"limit_filled":              m.LimitFilled,
+		"limit_partial":             m.LimitPartial,
+		"limit_canceled":            m.LimitCanceled,
+		"last_updated":              m.LastUpdated,
 	}
 }
 
@@ -270,7 +302,10 @@ func (at *AutoTrader) handlePendingLimits(record *logger.DecisionRecord) {
 					}
 					// 记录一次部分成交指标
 					if !p.PartialNoted {
-						at.metrics.mu.Lock(); at.metrics.LimitPartial++; at.metrics.LastUpdated = time.Now(); at.metrics.mu.Unlock()
+						at.metrics.mu.Lock()
+						at.metrics.LimitPartial++
+						at.metrics.LastUpdated = time.Now()
+						at.metrics.mu.Unlock()
 						p.PartialNoted = true
 					}
 				}
@@ -316,10 +351,16 @@ func (at *AutoTrader) handlePendingLimits(record *logger.DecisionRecord) {
 				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("limit_filled_sl_tp: %s %s qty=%.6f", p.Symbol, posSide, qty))
 			}
 			// metrics
-			at.metrics.mu.Lock(); at.metrics.LimitFilled++; at.metrics.LastUpdated = time.Now(); at.metrics.mu.Unlock()
+			at.metrics.mu.Lock()
+			at.metrics.LimitFilled++
+			at.metrics.LastUpdated = time.Now()
+			at.metrics.mu.Unlock()
 		} else {
 			log.Printf("ℹ️ 限价单(orderId=%d %s)不在未完成列表，且未持有对应方向仓位：可能已被取消或系统外处理", oid, p.Symbol)
-			at.metrics.mu.Lock(); at.metrics.LimitCanceled++; at.metrics.LastUpdated = time.Now(); at.metrics.mu.Unlock()
+			at.metrics.mu.Lock()
+			at.metrics.LimitCanceled++
+			at.metrics.LastUpdated = time.Now()
+			at.metrics.mu.Unlock()
 		}
 		delete(at.pendingLimits, oid)
 	}
@@ -452,6 +493,7 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 		lastLLMCallPerSymbol:  make(map[string]time.Time),
 		pendingLimits:         make(map[int64]*LimitPending),
 		lastSLUpdate:          make(map[string]time.Time),
+		pmState:               make(map[string]*PositionPMState),
 	}, nil
 }
 
@@ -732,13 +774,13 @@ func (at *AutoTrader) runCycle() error {
 	record.Route = string(route.Route)
 	record.RouteTemplate = route.TemplatePath
 	record.RouteConstraints = map[string]interface{}{
-		"rr_min":            route.Constraints.RRMin,
-		"leverage_max":      route.Constraints.LeverageMax,
-		"risk_pct_max":      route.Constraints.RiskPctMax,
-		"ema_near_pct":      route.Constraints.EMANearPct,
-		"expire_kbars":      route.Constraints.ExpireKBars,
-		"default_order":     route.Constraints.DefaultOrderType,
-		"btc_soft_channel":  route.Constraints.BTCSoftChannel,
+		"rr_min":           route.Constraints.RRMin,
+		"leverage_max":     route.Constraints.LeverageMax,
+		"risk_pct_max":     route.Constraints.RiskPctMax,
+		"ema_near_pct":     route.Constraints.EMANearPct,
+		"expire_kbars":     route.Constraints.ExpireKBars,
+		"default_order":    route.Constraints.DefaultOrderType,
+		"btc_soft_channel": route.Constraints.BTCSoftChannel,
 	}
 	// 若为 carry 或 range，默认不唤起 LLM（等待后续规则化管理），仅记录
 	if preCheckEnabled && ctx.Account.PositionCount == 0 {
@@ -829,18 +871,18 @@ func (at *AutoTrader) runCycle() error {
 			at.decisionLogger.LogDecision(record)
 			return nil
 		}
-			// 收敛候选列表到允许的符号，减少 LLM 成本
-			var filtered []decision.CandidateCoin
-			allowSet := map[string]struct{}{}
-			for _, s := range allowedSymbols {
-				allowSet[s] = struct{}{}
+		// 收敛候选列表到允许的符号，减少 LLM 成本
+		var filtered []decision.CandidateCoin
+		allowSet := map[string]struct{}{}
+		for _, s := range allowedSymbols {
+			allowSet[s] = struct{}{}
+		}
+		for _, c := range ctx.CandidateCoins {
+			if _, ok := allowSet[c.Symbol]; ok {
+				filtered = append(filtered, c)
 			}
-			for _, c := range ctx.CandidateCoins {
-				if _, ok := allowSet[c.Symbol]; ok {
-					filtered = append(filtered, c)
-				}
-			}
-			ctx.CandidateCoins = filtered
+		}
+		ctx.CandidateCoins = filtered
 		// 为 Agent 模式注入约束（通过env，使 Runner 自适配）
 		if route.Agent {
 			_ = os.Setenv("NOFX_AGENT_RR_MIN", fmt.Sprintf("%.2f", route.Constraints.RRMin))
@@ -852,13 +894,27 @@ func (at *AutoTrader) runCycle() error {
 			}
 			_ = os.Setenv("NOFX_AGENT_REQUIRE_EMA_NEAR", reqEma)
 		}
-		log.Printf("✅ PreCheck: 触发智能决策 (%d 个符号): %v | Regime=%s(%d) | mode=%s", len(allowedSymbols), allowedSymbols, regime.Type, regime.Confidence, func() string { if route.Agent { return "agent" } ; return "llm" }())
-		record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("precheck: allow=%v | regime=%s(%d) | mode=%s", allowedSymbols, regime.Type, regime.Confidence, func() string { if route.Agent { return "agent" } ; return "llm" }()))
+		log.Printf("✅ PreCheck: 触发智能决策 (%d 个符号): %v | Regime=%s(%d) | mode=%s", len(allowedSymbols), allowedSymbols, regime.Type, regime.Confidence, func() string {
+			if route.Agent {
+				return "agent"
+			}
+			return "llm"
+		}())
+		record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("precheck: allow=%v | regime=%s(%d) | mode=%s", allowedSymbols, regime.Type, regime.Confidence, func() string {
+			if route.Agent {
+				return "agent"
+			}
+			return "llm"
+		}()))
 		record.PreCheckAllowed = allowedSymbols
 		// metrics
 		at.metrics.mu.Lock()
 		at.metrics.PrecheckAllowed++
-		if route.Agent { at.metrics.AgentCalls++ } else { at.metrics.LLMCalls++ }
+		if route.Agent {
+			at.metrics.AgentCalls++
+		} else {
+			at.metrics.LLMCalls++
+		}
 		at.metrics.LastUpdated = time.Now()
 		at.metrics.mu.Unlock()
 	}
@@ -876,16 +932,10 @@ func (at *AutoTrader) runCycle() error {
 		runner := agent.NewLocalReActRunner()
 		dec, decErr = runner.Run(ctx, allowedSymbols)
 	} else {
-		// 选择模板：优先用路由模板（相对路径键），否则使用配置模板
+		// 选择模板：优先用路由模板键（PromptManager key），否则使用配置模板
 		templateName := at.systemPromptTemplate
 		if route.TemplatePath != "" {
-			// 将 "prompts/xxx.txt" 转换为模板键 "xxx"
-			key := route.TemplatePath
-			key = strings.TrimPrefix(key, "prompts/")
-			key = strings.TrimSuffix(key, ".txt")
-			if key != "" {
-				templateName = key
-			}
+			templateName = route.TemplatePath
 		}
 		log.Printf("🤖 正在请求AI分析并决策... [模板: %s]", templateName)
 		dec, decErr = decision.GetFullDecisionWithCustomPrompt(ctx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, templateName)
@@ -902,9 +952,9 @@ func (at *AutoTrader) runCycle() error {
 		}
 	}
 
-		if decErr != nil {
-			record.Success = false
-			record.ErrorMessage = fmt.Sprintf("获取AI决策失败: %v", decErr)
+	if decErr != nil {
+		record.Success = false
+		record.ErrorMessage = fmt.Sprintf("获取AI决策失败: %v", decErr)
 
 		// 打印系统提示词和AI思维链（即使有错误，也要输出以便调试）
 		if dec != nil {
@@ -931,9 +981,9 @@ func (at *AutoTrader) runCycle() error {
 			}
 		}
 
-			at.decisionLogger.LogDecision(record)
-			return fmt.Errorf("获取AI决策失败: %w", decErr)
-		}
+		at.decisionLogger.LogDecision(record)
+		return fmt.Errorf("获取AI决策失败: %w", decErr)
+	}
 
 	// // 5. 打印系统提示词
 	// log.Printf("\n" + strings.Repeat("=", 70))
@@ -963,8 +1013,8 @@ func (at *AutoTrader) runCycle() error {
 	// 8. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
 	log.Print(strings.Repeat("-", 70))
 
-		// 8. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
-		sortedDecisions := sortDecisionsByPriority(dec.Decisions)
+	// 8. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
+	sortedDecisions := sortDecisionsByPriority(dec.Decisions)
 
 	log.Println("🔄 执行顺序（已优化）: 先平仓→后开仓")
 	for i, d := range sortedDecisions {
@@ -973,37 +1023,37 @@ func (at *AutoTrader) runCycle() error {
 	log.Println()
 
 	// 执行决策并记录结果
-		for _, d := range sortedDecisions {
-			actionRecord := logger.DecisionAction{
-				Action:    d.Action,
-				Symbol:    d.Symbol,
-				Quantity:  0,
-				Leverage:  d.Leverage,
-				Price:     0,
-				Timestamp: time.Now(),
-				Success:   false,
-			}
+	for _, d := range sortedDecisions {
+		actionRecord := logger.DecisionAction{
+			Action:    d.Action,
+			Symbol:    d.Symbol,
+			Quantity:  0,
+			Leverage:  d.Leverage,
+			Price:     0,
+			Timestamp: time.Now(),
+			Success:   false,
+		}
 
-			if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
-				log.Printf("❌ 执行决策失败 (%s %s): %v", d.Symbol, d.Action, err)
-				actionRecord.Error = err.Error()
-				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s 失败: %v", d.Symbol, d.Action, err))
-				// metrics
-				at.metrics.mu.Lock()
-				at.metrics.DecisionsFailed++
-				at.metrics.LastUpdated = time.Now()
-				at.metrics.mu.Unlock()
-			} else {
-				actionRecord.Success = true
-				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s 成功", d.Symbol, d.Action))
-				// 成功执行后短暂延迟
-				time.Sleep(1 * time.Second)
-				// metrics
-				at.metrics.mu.Lock()
-				at.metrics.DecisionsExecuted++
-				at.metrics.LastUpdated = time.Now()
-				at.metrics.mu.Unlock()
-			}
+		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
+			log.Printf("❌ 执行决策失败 (%s %s): %v", d.Symbol, d.Action, err)
+			actionRecord.Error = err.Error()
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s 失败: %v", d.Symbol, d.Action, err))
+			// metrics
+			at.metrics.mu.Lock()
+			at.metrics.DecisionsFailed++
+			at.metrics.LastUpdated = time.Now()
+			at.metrics.mu.Unlock()
+		} else {
+			actionRecord.Success = true
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s 成功", d.Symbol, d.Action))
+			// 成功执行后短暂延迟
+			time.Sleep(1 * time.Second)
+			// metrics
+			at.metrics.mu.Lock()
+			at.metrics.DecisionsExecuted++
+			at.metrics.LastUpdated = time.Now()
+			at.metrics.mu.Unlock()
+		}
 
 		record.Decisions = append(record.Decisions, actionRecord)
 	}
@@ -1568,10 +1618,17 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 			log.Printf("  ✓ 已下限价买单 GTC: 价格 %.6f 数量 %.6f（待成交后再设置SL/TP）", decision.LimitPrice, quantity)
 			// 记录挂单，用于后续生命周期管理
 			var oid int64
-			if v, ok := order["orderId"].(int64); ok { oid = v }
+			if v, ok := order["orderId"].(int64); ok {
+				oid = v
+			}
 			expK := decision.ExpireKBars
-			if expK <= 0 { expK = 8 } // 默认 8 根3mK线 ≈ 24min
-			at.metrics.mu.Lock(); at.metrics.LimitPlaced++; at.metrics.LastUpdated = time.Now(); at.metrics.mu.Unlock()
+			if expK <= 0 {
+				expK = 8
+			} // 默认 8 根3mK线 ≈ 24min
+			at.metrics.mu.Lock()
+			at.metrics.LimitPlaced++
+			at.metrics.LastUpdated = time.Now()
+			at.metrics.mu.Unlock()
 			at.pendingLimits[oid] = &LimitPending{
 				OrderID:    oid,
 				Symbol:     decision.Symbol,
@@ -1736,10 +1793,17 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		if err == nil {
 			log.Printf("  ✓ 已下限价卖单 GTC: 价格 %.6f 数量 %.6f（待成交后再设置SL/TP）", decision.LimitPrice, quantity)
 			var oid int64
-			if v, ok := order["orderId"].(int64); ok { oid = v }
+			if v, ok := order["orderId"].(int64); ok {
+				oid = v
+			}
 			expK := decision.ExpireKBars
-			if expK <= 0 { expK = 8 }
-			at.metrics.mu.Lock(); at.metrics.LimitPlaced++; at.metrics.LastUpdated = time.Now(); at.metrics.mu.Unlock()
+			if expK <= 0 {
+				expK = 8
+			}
+			at.metrics.mu.Lock()
+			at.metrics.LimitPlaced++
+			at.metrics.LastUpdated = time.Now()
+			at.metrics.mu.Unlock()
 			at.pendingLimits[oid] = &LimitPending{
 				OrderID:    oid,
 				Symbol:     decision.Symbol,
@@ -2152,16 +2216,16 @@ func (at *AutoTrader) GetPendingLimits() []map[string]interface{} {
 	out := []map[string]interface{}{}
 	for _, p := range at.pendingLimits {
 		out = append(out, map[string]interface{}{
-			"order_id":   p.OrderID,
-			"symbol":     p.Symbol,
-			"action":     p.Action,
-			"quantity":   p.Quantity,
+			"order_id":    p.OrderID,
+			"symbol":      p.Symbol,
+			"action":      p.Action,
+			"quantity":    p.Quantity,
 			"limit_price": p.LimitPrice,
-			"leverage":   p.Leverage,
-			"stop_loss":  p.StopLoss,
+			"leverage":    p.Leverage,
+			"stop_loss":   p.StopLoss,
 			"take_profit": p.TakeProfit,
-			"created_at": p.CreatedAt,
-			"expire_at":  p.ExpireAt,
+			"created_at":  p.CreatedAt,
+			"expire_at":   p.ExpireAt,
 		})
 	}
 	return out
@@ -2178,6 +2242,57 @@ func (at *AutoTrader) manageOpenPositions(record *logger.DecisionRecord) {
 	if err != nil || len(positions) == 0 {
 		return
 	}
+
+	// PositionManager 配置（通过环境变量可调）
+	bePct := 3.0 // BE 阈值（%）
+	if v := os.Getenv("NOFX_PM_BE_PROFIT_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+			bePct = f
+		}
+	}
+	tp1Pct := 6.0 // 第一次分批阈值（%）
+	if v := os.Getenv("NOFX_PM_TP1_PROFIT_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+			tp1Pct = f
+		}
+	}
+	tp2Pct := 10.0 // 第二次分批阈值（%）
+	if v := os.Getenv("NOFX_PM_TP2_PROFIT_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+			tp2Pct = f
+		}
+	}
+	tp1ClosePct := 30.0 // 第一次分批减仓比例
+	if v := os.Getenv("NOFX_PM_TP1_CLOSE_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 && f <= 100 {
+			tp1ClosePct = f
+		}
+	}
+	tp2ClosePct := 30.0 // 第二次分批减仓比例
+	if v := os.Getenv("NOFX_PM_TP2_CLOSE_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 && f <= 100 {
+			tp2ClosePct = f
+		}
+	}
+	atrK := 1.5 // ATR 追踪系数
+	if v := os.Getenv("NOFX_PM_ATR_K"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+			atrK = f
+		}
+	}
+	updateThrottleSec := 30 // 最小更新间隔（秒）
+	if v := os.Getenv("NOFX_PM_UPDATE_THROTTLE_SEC"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil && n > 0 {
+			updateThrottleSec = n
+		}
+	}
+	atrTrailMinProfit := 8.0 // 最小触发 ATR 追踪的利润（%）
+	if v := os.Getenv("NOFX_PM_ATR_PROFIT_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 {
+			atrTrailMinProfit = f
+		}
+	}
+
 	for _, pos := range positions {
 		symbol := pos["symbol"].(string)
 		side := strings.ToUpper(pos["side"].(string)) // LONG/SHORT
@@ -2186,17 +2301,30 @@ func (at *AutoTrader) manageOpenPositions(record *logger.DecisionRecord) {
 		leverage := int(pos["leverage"].(float64))
 		posAmt := pos["positionAmt"].(float64)
 		qty := posAmt
-		if qty < 0 { qty = -qty }
+		if qty < 0 {
+			qty = -qty
+		}
 		if qty == 0 || entry <= 0 || mark <= 0 {
 			continue
 		}
-		// 节流：同向 symbol 至少 30s 更新一次
+
 		key := fmt.Sprintf("%s_%s", symbol, side)
-		if t, ok := at.lastSLUpdate[key]; ok && time.Since(t) < 30*time.Second {
+
+		// 节流：同向 symbol 至少 updateThrottleSec 秒才能做一次 PM 行为
+		if t, ok := at.lastSLUpdate[key]; ok && time.Since(t) < time.Duration(updateThrottleSec)*time.Second {
 			continue
 		}
+
+		// PM 状态初始化/重置（根据入场价识别新仓位）
+		state, ok := at.pmState[key]
+		if !ok || state == nil || state.EntryPrice == 0 || math.Abs(state.EntryPrice-entry)/entry > 0.001 {
+			state = &PositionPMState{EntryPrice: entry, Phase: 0}
+			at.pmState[key] = state
+		}
+
 		// 当前 SL/TP
-		slCur, _ , _ := at.trader.GetStopTakePrices(symbol, side)
+		slCur, tpCur, _ := at.trader.GetStopTakePrices(symbol, side)
+
 		// 利润百分比（按杠杆）
 		profitPct := 0.0
 		if side == "LONG" {
@@ -2204,28 +2332,151 @@ func (at *AutoTrader) manageOpenPositions(record *logger.DecisionRecord) {
 		} else {
 			profitPct = ((entry - mark) / entry) * float64(leverage) * 100.0
 		}
+
 		// 市场 ATR
 		md, _ := market.Get(symbol)
 		atr := 0.0
 		if md != nil && md.IntradaySeries != nil {
 			atr = md.IntradaySeries.ATR14
 		}
-		// 目标 SL：先 BE（≥3%），再 ATR 追踪（≥8%）
+
+		now := time.Now()
+
+		// 1) BE：浮盈≥bePct 时，将 SL 移至入场价（如果仍在亏损侧）
 		newSL := 0.0
-		if profitPct >= 3.0 {
-			newSL = entry // BE
-		}
-		if profitPct >= 8.0 && atr > 0 {
-			k := 1.5
+		if profitPct >= bePct {
 			if side == "LONG" {
-				slTrail := mark - k*atr
-				if slTrail > newSL { newSL = slTrail }
-			} else {
-				slTrail := mark + k*atr
-				if newSL == 0 || slTrail < newSL { newSL = slTrail }
+				if slCur == 0 || slCur < entry {
+					newSL = entry
+				}
+			} else { // SHORT
+				if slCur == 0 || slCur > entry {
+					newSL = entry
+				}
 			}
 		}
-		// 更新条件：newSL>0 且相对当前 SL 改变超过 0.3%
+
+		// 2) 分批：达到 tp1/tp2 阈值时按比例部分平仓（优先于 ATR 追踪）
+		//    使用 executeDecisionWithRecord 复用现有执行/日志/指标逻辑
+		if profitPct >= tp1Pct && state.Phase < 1 {
+			dec := decision.Decision{
+				Symbol:          symbol,
+				Action:          "partial_close",
+				ClosePercentage: tp1ClosePct,
+				NewStopLoss:     slCur,
+				NewTakeProfit:   tpCur,
+			}
+			actionRecord := logger.DecisionAction{
+				Action:    dec.Action,
+				Symbol:    dec.Symbol,
+				Leverage:  leverage,
+				Timestamp: now,
+			}
+			if err := at.executeDecisionWithRecord(&dec, &actionRecord); err != nil {
+				log.Printf("⚠️ PositionManager 分批(1) 失败 %s: %v", symbol, err)
+			} else {
+				state.Phase = 1
+				state.LastActionTime = now
+				at.lastSLUpdate[key] = now
+				if record != nil {
+					record.Decisions = append(record.Decisions, actionRecord)
+					record.ExecutionLog = append(record.ExecutionLog,
+						fmt.Sprintf("pm_partial_1: %s %s close=%.1f%% profit=%.2f%%",
+							symbol, side, tp1ClosePct, profitPct))
+				}
+				// 分批后本轮不再进一步处理该仓位，等下一个周期再评估
+				continue
+			}
+		}
+
+		if profitPct >= tp2Pct && state.Phase < 2 {
+			dec := decision.Decision{
+				Symbol:          symbol,
+				Action:          "partial_close",
+				ClosePercentage: tp2ClosePct,
+				NewStopLoss:     slCur,
+				NewTakeProfit:   tpCur,
+			}
+			actionRecord := logger.DecisionAction{
+				Action:    dec.Action,
+				Symbol:    dec.Symbol,
+				Leverage:  leverage,
+				Timestamp: now,
+			}
+			if err := at.executeDecisionWithRecord(&dec, &actionRecord); err != nil {
+				log.Printf("⚠️ PositionManager 分批(2) 失败 %s: %v", symbol, err)
+			} else {
+				state.Phase = 2
+				state.LastActionTime = now
+				at.lastSLUpdate[key] = now
+				if record != nil {
+					record.Decisions = append(record.Decisions, actionRecord)
+					record.ExecutionLog = append(record.ExecutionLog,
+						fmt.Sprintf("pm_partial_2: %s %s close=%.1f%% profit=%.2f%%",
+							symbol, side, tp2ClosePct, profitPct))
+				}
+				continue
+			}
+		}
+
+		// 3) 简单结构化退出：若已分批且价格跌破/收回 EMA20，则全部平仓
+		if profitPct >= tp1Pct && state.Phase >= 1 && md != nil && md.CurrentEMA20 > 0 {
+			shouldExit := false
+			if side == "LONG" && mark < md.CurrentEMA20 {
+				shouldExit = true
+			}
+			if side == "SHORT" && mark > md.CurrentEMA20 {
+				shouldExit = true
+			}
+			if shouldExit {
+				action := "close_long"
+				if side == "SHORT" {
+					action = "close_short"
+				}
+				dec := decision.Decision{
+					Symbol: symbol,
+					Action: action,
+				}
+				actionRecord := logger.DecisionAction{
+					Action:    dec.Action,
+					Symbol:    dec.Symbol,
+					Leverage:  leverage,
+					Timestamp: now,
+				}
+				if err := at.executeDecisionWithRecord(&dec, &actionRecord); err != nil {
+					log.Printf("⚠️ PositionManager 结构化退出失败 %s: %v", symbol, err)
+				} else {
+					state.Phase = 3
+					state.LastActionTime = now
+					at.lastSLUpdate[key] = now
+					if record != nil {
+						record.Decisions = append(record.Decisions, actionRecord)
+						record.ExecutionLog = append(record.ExecutionLog,
+							fmt.Sprintf("pm_struct_exit: %s %s profit=%.2f%% ema20=%.4f",
+								symbol, side, profitPct, md.CurrentEMA20))
+					}
+					// 已规则化退出，跳过后续 SL 更新
+					continue
+				}
+			}
+		}
+
+		// 4) ATR 追踪：在达到一定盈利后，按 ATR 轨道更新 SL
+		if profitPct >= atrTrailMinProfit && atr > 0 {
+			if side == "LONG" {
+				slTrail := mark - atrK*atr
+				if slTrail > newSL {
+					newSL = slTrail
+				}
+			} else {
+				slTrail := mark + atrK*atr
+				if newSL == 0 || slTrail < newSL {
+					newSL = slTrail
+				}
+			}
+		}
+
+		// 5) 推送新的 SL（若有变化）：newSL>0 且相对当前 SL 改变超过 0.3%
 		if newSL > 0 {
 			threshold := 0.003 // 0.3%
 			change := 1.0
@@ -2236,9 +2487,10 @@ func (at *AutoTrader) manageOpenPositions(record *logger.DecisionRecord) {
 				if err := at.trader.SetStopLoss(symbol, side, qty, newSL); err != nil {
 					log.Printf("⚠️ 更新止损失败 %s %s: %v", symbol, side, err)
 				} else {
-					at.lastSLUpdate[key] = time.Now()
+					at.lastSLUpdate[key] = now
 					if record != nil {
-						record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("pm_set_sl: %s %s sl=%.6f profit=%.2f%%", symbol, side, newSL, profitPct))
+						record.ExecutionLog = append(record.ExecutionLog,
+							fmt.Sprintf("pm_set_sl: %s %s sl=%.6f profit=%.2f%%", symbol, side, newSL, profitPct))
 					}
 				}
 			}

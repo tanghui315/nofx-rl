@@ -218,6 +218,9 @@ func (s *Server) handleGetSystemConfig(c *gin.Context) {
 		altcoinLeverage = val
 	}
 
+	// 风险档位（可选）
+	profileStr, _ := s.database.GetSystemConfig("profile")
+
 	// 获取内测模式配置
 	betaModeStr, _ := s.database.GetSystemConfig("beta_mode")
 	betaMode := betaModeStr == "true"
@@ -228,6 +231,7 @@ func (s *Server) handleGetSystemConfig(c *gin.Context) {
 		"default_coins":    defaultCoins,
 		"btc_eth_leverage": btcEthLeverage,
 		"altcoin_leverage": altcoinLeverage,
+		"profile":          profileStr,
 	})
 }
 

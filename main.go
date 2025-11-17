@@ -1,21 +1,21 @@
 package main
 
 import (
-    "encoding/json"
-    "fmt"
-    "log"
-    "nofx/api"
-    "nofx/auth"
-    "nofx/config"
-    "nofx/decision"
-    "nofx/manager"
-    "nofx/market"
-    "nofx/news"
-    "nofx/mcp"
-    "nofx/pool"
-    "os"
-    "os/signal"
-    "strconv"
+	"encoding/json"
+	"fmt"
+	"log"
+	"nofx/api"
+	"nofx/auth"
+	"nofx/config"
+	"nofx/decision"
+	"nofx/manager"
+	"nofx/market"
+	"nofx/mcp"
+	"nofx/news"
+	"nofx/pool"
+	"os"
+	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -24,69 +24,69 @@ import (
 
 // NewsSourceConfig 新闻源配置（目前主要支持 Telegram）
 type NewsSourceConfig struct {
-    Provider string                  `json:"provider"`          // 例如 "telegram"
-    Telegram *TelegramNewsConfig     `json:"telegram,omitempty"` // Telegram 客户端配置
-    Channels []TelegramNewsChannel   `json:"channels,omitempty"` // 频道列表
+	Provider string                `json:"provider"`           // 例如 "telegram"
+	Telegram *TelegramNewsConfig   `json:"telegram,omitempty"` // Telegram 客户端配置
+	Channels []TelegramNewsChannel `json:"channels,omitempty"` // 频道列表
 }
 
 // TelegramNewsConfig Telegram 抓取配置
 type TelegramNewsConfig struct {
-    BaseURL  string `json:"baseurl"`  // 基础 URL，默认 https://t.me/s
-    ProxyURL string `json:"proxyurl"` // 代理 URL，可选
+	BaseURL  string `json:"baseurl"`  // 基础 URL，默认 https://t.me/s
+	ProxyURL string `json:"proxyurl"` // 代理 URL，可选
 }
 
 // TelegramNewsChannel 单个 Telegram 频道配置
 type TelegramNewsChannel struct {
-    ID   string `json:"id"`   // 频道 ID（如 t.me/ChannelPANews 中的 ChannelPANews）
-    Name string `json:"name"` // 频道名称（仅用于日志/展示）
+	ID   string `json:"id"`   // 频道 ID（如 t.me/ChannelPANews 中的 ChannelPANews）
+	Name string `json:"name"` // 频道名称（仅用于日志/展示）
 }
 
 // ConfigFile 配置文件结构，只包含需要同步到数据库的字段
 // TODO 现在与config.Config相同，未来会被替换， 现在为了兼容性不得不保留当前文件
 type ConfigFile struct {
-    AdminMode          bool                  `json:"admin_mode"`
-    BetaMode           bool                  `json:"beta_mode"`
-    Profile            string                `json:"profile"` // 风险档位：ultra_safe|safe|balanced|bold|ultra_bold
-    APIServerPort      int                   `json:"api_server_port"`
-    UseDefaultCoins    bool                  `json:"use_default_coins"`
-    DefaultCoins       []string              `json:"default_coins"`
-    CoinPoolAPIURL     string                `json:"coin_pool_api_url"`
-    OITopAPIURL        string                `json:"oi_top_api_url"`
-    MaxDailyLoss       float64               `json:"max_daily_loss"`
-    MaxDrawdown        float64               `json:"max_drawdown"`
-    StopTradingMinutes int                   `json:"stop_trading_minutes"`
-    Leverage           config.LeverageConfig `json:"leverage"`
-    JWTSecret          string                `json:"jwt_secret"`
-    DataKLineTime      string                `json:"data_k_line_time"`
-    Log                *config.LogConfig     `json:"log"` // 日志配置
-    // 网络代理（可选）：用于在受限网络环境访问 Binance/API
-    HTTPProxy          string                `json:"http_proxy"`
-    HTTPSProxy         string                `json:"https_proxy"`
-    NoProxy            string                `json:"no_proxy"`
-    News               []NewsSourceConfig    `json:"news"` // 新闻源配置（可选）
-    // LLM/交易阈值（可选）
-    LLM                *LLMSettings          `json:"llm"`
-    TradingThresholds  *TradingThresholds    `json:"trading_thresholds"`
+	AdminMode          bool                  `json:"admin_mode"`
+	BetaMode           bool                  `json:"beta_mode"`
+	Profile            string                `json:"profile"` // 风险档位：ultra_safe|safe|balanced|bold|ultra_bold
+	APIServerPort      int                   `json:"api_server_port"`
+	UseDefaultCoins    bool                  `json:"use_default_coins"`
+	DefaultCoins       []string              `json:"default_coins"`
+	CoinPoolAPIURL     string                `json:"coin_pool_api_url"`
+	OITopAPIURL        string                `json:"oi_top_api_url"`
+	MaxDailyLoss       float64               `json:"max_daily_loss"`
+	MaxDrawdown        float64               `json:"max_drawdown"`
+	StopTradingMinutes int                   `json:"stop_trading_minutes"`
+	Leverage           config.LeverageConfig `json:"leverage"`
+	JWTSecret          string                `json:"jwt_secret"`
+	DataKLineTime      string                `json:"data_k_line_time"`
+	Log                *config.LogConfig     `json:"log"` // 日志配置
+	// 网络代理（可选）：用于在受限网络环境访问 Binance/API
+	HTTPProxy  string             `json:"http_proxy"`
+	HTTPSProxy string             `json:"https_proxy"`
+	NoProxy    string             `json:"no_proxy"`
+	News       []NewsSourceConfig `json:"news"` // 新闻源配置（可选）
+	// LLM/交易阈值（可选）
+	LLM               *LLMSettings       `json:"llm"`
+	TradingThresholds *TradingThresholds `json:"trading_thresholds"`
 }
 
 // LLMSettings LLM/预检/预算 配置
 type LLMSettings struct {
-    EventMode            bool    `json:"event_mode"`              // 是否启用事件触发（预检）模式
-    OppScoreMin          int     `json:"opp_score_min"`           // 机会分阈值
-    EmaProxPct           float64 `json:"ema_prox_pct"`            // 贴近 EMA20 阈值（%）
-    OIDeltaPct           float64 `json:"oi_delta_pct"`            // OI 变化阈值（%）
-    BBBandwidthMin       float64 `json:"bb_bw_min"`               // 带宽阈值（%）
-    MaxCallsHourly       int     `json:"max_calls_hourly"`        // 每小时 LLM 调用上限
-    MaxCallsDaily        int     `json:"max_calls_daily"`         // 每日 LLM 调用上限
-    SymbolMinIntervalMin int     `json:"symbol_min_interval_min"` // 同符号最小间隔（分钟）
-    GlobalMaxPerScan     int     `json:"global_max_per_scan"`     // 每次扫描最多放行的符号
-    Temperature          float64 `json:"temperature"`             // 模型温度
+	EventMode            bool    `json:"event_mode"`              // 是否启用事件触发（预检）模式
+	OppScoreMin          int     `json:"opp_score_min"`           // 机会分阈值
+	EmaProxPct           float64 `json:"ema_prox_pct"`            // 贴近 EMA20 阈值（%）
+	OIDeltaPct           float64 `json:"oi_delta_pct"`            // OI 变化阈值（%）
+	BBBandwidthMin       float64 `json:"bb_bw_min"`               // 带宽阈值（%）
+	MaxCallsHourly       int     `json:"max_calls_hourly"`        // 每小时 LLM 调用上限
+	MaxCallsDaily        int     `json:"max_calls_daily"`         // 每日 LLM 调用上限
+	SymbolMinIntervalMin int     `json:"symbol_min_interval_min"` // 同符号最小间隔（分钟）
+	GlobalMaxPerScan     int     `json:"global_max_per_scan"`     // 每次扫描最多放行的符号
+	Temperature          float64 `json:"temperature"`             // 模型温度
 }
 
 // TradingThresholds 交易阈值配置
 type TradingThresholds struct {
-    AbsProfitMinUSD     float64 `json:"abs_profit_min_usd"`
-    ProfitFeeMultiplier float64 `json:"profit_fee_multiplier"`
+	AbsProfitMinUSD     float64 `json:"abs_profit_min_usd"`
+	ProfitFeeMultiplier float64 `json:"profit_fee_multiplier"`
 }
 
 // loadConfigFile 读取并解析config.json文件
@@ -114,105 +114,105 @@ func loadConfigFile() (*ConfigFile, error) {
 
 // applyLLMProfile 根据档位设置默认的 LLM/PreCheck 相关环境变量（用户显式 env 优先）
 func applyLLMProfile(profile string) {
-    if profile == "" {
-        return
-    }
-    // 简化：仅当对应 env 未设置时才写入
-    setIfEmpty := func(key, val string) {
-        if os.Getenv(key) == "" {
-            _ = os.Setenv(key, val)
-        }
-    }
-    switch strings.ToLower(strings.TrimSpace(profile)) {
-    case "ultra_safe":
-        setIfEmpty("NOFX_OPP_SCORE_MIN", "10")
-        setIfEmpty("NOFX_EMA_PROX_PCT", "0.3")
-        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "15")
-        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
-        setIfEmpty("AI_TEMPERATURE", "0.0")
-        // 软通道严格：不额外设置开关，提示词/引擎已默认保守
-    case "safe":
-        setIfEmpty("NOFX_OPP_SCORE_MIN", "9")
-        setIfEmpty("NOFX_EMA_PROX_PCT", "0.35")
-        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "12")
-        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
-        setIfEmpty("AI_TEMPERATURE", "0.0")
-    case "balanced":
-        setIfEmpty("NOFX_OPP_SCORE_MIN", "8")
-        setIfEmpty("NOFX_EMA_PROX_PCT", "0.4")
-        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "10")
-        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
-        setIfEmpty("AI_TEMPERATURE", "0.0")
-    case "bold":
-        setIfEmpty("NOFX_OPP_SCORE_MIN", "7")
-        setIfEmpty("NOFX_EMA_PROX_PCT", "0.5")
-        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "8")
-        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "2")
-        setIfEmpty("AI_TEMPERATURE", "0.1")
-    case "ultra_bold":
-        setIfEmpty("NOFX_OPP_SCORE_MIN", "6")
-        setIfEmpty("NOFX_EMA_PROX_PCT", "0.6")
-        setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "6")
-        setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "3")
-        setIfEmpty("AI_TEMPERATURE", "0.15")
-    default:
-        // 未识别，忽略
-        return
-    }
-    log.Printf("🎚️  已应用 Profile 档位: %s（如需覆盖请设置环境变量）", profile)
+	if profile == "" {
+		return
+	}
+	// 简化：仅当对应 env 未设置时才写入
+	setIfEmpty := func(key, val string) {
+		if os.Getenv(key) == "" {
+			_ = os.Setenv(key, val)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "ultra_safe":
+		setIfEmpty("NOFX_OPP_SCORE_MIN", "10")
+		setIfEmpty("NOFX_EMA_PROX_PCT", "0.3")
+		setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "15")
+		setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
+		setIfEmpty("AI_TEMPERATURE", "0.0")
+		// 软通道严格：不额外设置开关，提示词/引擎已默认保守
+	case "safe":
+		setIfEmpty("NOFX_OPP_SCORE_MIN", "9")
+		setIfEmpty("NOFX_EMA_PROX_PCT", "0.35")
+		setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "12")
+		setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
+		setIfEmpty("AI_TEMPERATURE", "0.0")
+	case "balanced":
+		setIfEmpty("NOFX_OPP_SCORE_MIN", "8")
+		setIfEmpty("NOFX_EMA_PROX_PCT", "0.4")
+		setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "10")
+		setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "1")
+		setIfEmpty("AI_TEMPERATURE", "0.0")
+	case "bold":
+		setIfEmpty("NOFX_OPP_SCORE_MIN", "7")
+		setIfEmpty("NOFX_EMA_PROX_PCT", "0.5")
+		setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "8")
+		setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "2")
+		setIfEmpty("AI_TEMPERATURE", "0.1")
+	case "ultra_bold":
+		setIfEmpty("NOFX_OPP_SCORE_MIN", "6")
+		setIfEmpty("NOFX_EMA_PROX_PCT", "0.6")
+		setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", "6")
+		setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", "3")
+		setIfEmpty("AI_TEMPERATURE", "0.15")
+	default:
+		// 未识别，忽略
+		return
+	}
+	log.Printf("🎚️  已应用 Profile 档位: %s（如需覆盖请设置环境变量）", profile)
 }
 
 // applyLLMFromConfig 将 config.json 的 llm 与 trading_thresholds 应用为默认（若 env 未显式设置）
 func applyLLMFromConfig(cfg *ConfigFile) {
-    if cfg == nil {
-        return
-    }
-    setIfEmpty := func(key, val string) {
-        if os.Getenv(key) == "" && val != "" {
-            _ = os.Setenv(key, val)
-        }
-    }
-    if l := cfg.LLM; l != nil {
-        // 预检事件模式
-        if l.EventMode {
-            setIfEmpty("NOFX_PRECHECK_ENABLED", "1")
-        }
-        if l.OppScoreMin > 0 {
-            setIfEmpty("NOFX_OPP_SCORE_MIN", strconv.Itoa(l.OppScoreMin))
-        }
-        if l.EmaProxPct > 0 {
-            setIfEmpty("NOFX_EMA_PROX_PCT", fmt.Sprintf("%.3f", l.EmaProxPct))
-        }
-        if l.OIDeltaPct > 0 {
-            setIfEmpty("NOFX_OI_DELTA_PCT", fmt.Sprintf("%.1f", l.OIDeltaPct))
-        }
-        if l.BBBandwidthMin > 0 {
-            setIfEmpty("NOFX_BB_BW_MIN", fmt.Sprintf("%.2f", l.BBBandwidthMin))
-        }
-        if l.MaxCallsHourly > 0 {
-            setIfEmpty("NOFX_MAX_CALLS_HOURLY", strconv.Itoa(l.MaxCallsHourly))
-        }
-        if l.MaxCallsDaily > 0 {
-            setIfEmpty("NOFX_MAX_CALLS_DAILY", strconv.Itoa(l.MaxCallsDaily))
-        }
-        if l.SymbolMinIntervalMin > 0 {
-            setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", strconv.Itoa(l.SymbolMinIntervalMin))
-        }
-        if l.GlobalMaxPerScan >= 0 {
-            setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", strconv.Itoa(l.GlobalMaxPerScan))
-        }
-        if l.Temperature >= 0 {
-            setIfEmpty("AI_TEMPERATURE", fmt.Sprintf("%.2f", l.Temperature))
-        }
-    }
-    if t := cfg.TradingThresholds; t != nil {
-        if t.AbsProfitMinUSD > 0 {
-            setIfEmpty("NOFX_ABS_PROFIT_MIN_USD", fmt.Sprintf("%.2f", t.AbsProfitMinUSD))
-        }
-        if t.ProfitFeeMultiplier > 0 {
-            setIfEmpty("NOFX_PROFIT_FEE_MULTIPLIER", fmt.Sprintf("%.1f", t.ProfitFeeMultiplier))
-        }
-    }
+	if cfg == nil {
+		return
+	}
+	setIfEmpty := func(key, val string) {
+		if os.Getenv(key) == "" && val != "" {
+			_ = os.Setenv(key, val)
+		}
+	}
+	if l := cfg.LLM; l != nil {
+		// 预检事件模式
+		if l.EventMode {
+			setIfEmpty("NOFX_PRECHECK_ENABLED", "1")
+		}
+		if l.OppScoreMin > 0 {
+			setIfEmpty("NOFX_OPP_SCORE_MIN", strconv.Itoa(l.OppScoreMin))
+		}
+		if l.EmaProxPct > 0 {
+			setIfEmpty("NOFX_EMA_PROX_PCT", fmt.Sprintf("%.3f", l.EmaProxPct))
+		}
+		if l.OIDeltaPct > 0 {
+			setIfEmpty("NOFX_OI_DELTA_PCT", fmt.Sprintf("%.1f", l.OIDeltaPct))
+		}
+		if l.BBBandwidthMin > 0 {
+			setIfEmpty("NOFX_BB_BW_MIN", fmt.Sprintf("%.2f", l.BBBandwidthMin))
+		}
+		if l.MaxCallsHourly > 0 {
+			setIfEmpty("NOFX_MAX_CALLS_HOURLY", strconv.Itoa(l.MaxCallsHourly))
+		}
+		if l.MaxCallsDaily > 0 {
+			setIfEmpty("NOFX_MAX_CALLS_DAILY", strconv.Itoa(l.MaxCallsDaily))
+		}
+		if l.SymbolMinIntervalMin > 0 {
+			setIfEmpty("NOFX_SYMBOL_MIN_INTERVAL_MIN", strconv.Itoa(l.SymbolMinIntervalMin))
+		}
+		if l.GlobalMaxPerScan >= 0 {
+			setIfEmpty("NOFX_GLOBAL_MAX_PER_SCAN", strconv.Itoa(l.GlobalMaxPerScan))
+		}
+		if l.Temperature >= 0 {
+			setIfEmpty("AI_TEMPERATURE", fmt.Sprintf("%.2f", l.Temperature))
+		}
+	}
+	if t := cfg.TradingThresholds; t != nil {
+		if t.AbsProfitMinUSD > 0 {
+			setIfEmpty("NOFX_ABS_PROFIT_MIN_USD", fmt.Sprintf("%.2f", t.AbsProfitMinUSD))
+		}
+		if t.ProfitFeeMultiplier > 0 {
+			setIfEmpty("NOFX_PROFIT_FEE_MULTIPLIER", fmt.Sprintf("%.1f", t.ProfitFeeMultiplier))
+		}
+	}
 }
 
 // syncConfigToDatabase 将配置同步到数据库
@@ -220,13 +220,13 @@ func syncConfigToDatabase(database *config.Database, configFile *ConfigFile) err
 	if configFile == nil {
 		return nil
 	}
-
 	log.Printf("🔄 开始同步config.json到数据库...")
 
 	// 同步各配置项到数据库
 	configs := map[string]string{
 		"admin_mode":           fmt.Sprintf("%t", configFile.AdminMode),
 		"beta_mode":            fmt.Sprintf("%t", configFile.BetaMode),
+		"profile":              strings.TrimSpace(configFile.Profile),
 		"api_server_port":      strconv.Itoa(configFile.APIServerPort),
 		"use_default_coins":    fmt.Sprintf("%t", configFile.UseDefaultCoins),
 		"coin_pool_api_url":    configFile.CoinPoolAPIURL,
@@ -315,43 +315,44 @@ func main() {
 	// In Docker Compose, variables are injected by the runtime and this is harmless.
 	_ = godotenv.Load()
 
-    // 初始化数据库配置
-    dbPath := "config.db"
+	// 初始化数据库配置
+	dbPath := "config.db"
 	if len(os.Args) > 1 {
 		dbPath = os.Args[1]
 	}
 
-    // 读取配置文件
-    configFile, err := loadConfigFile()
-    if err != nil {
-        log.Fatalf("❌ 读取config.json失败: %v", err)
-    }
+	// 读取配置文件
+	configFile, err := loadConfigFile()
+	if err != nil {
+		log.Fatalf("❌ 读取config.json失败: %v", err)
+	}
 
-    // 应用 HTTP/HTTPS 代理（如在受限网络环境）
-    if cfg := configFile; cfg != nil {
-        // 应用风险档位（仅在相关 env 未设置时生效）
-        if cfg.Profile != "" {
-            applyLLMProfile(cfg.Profile)
-        }
-        // 应用 llm 与交易阈值（config 为主，env 作为覆盖）
-        applyLLMFromConfig(cfg)
-        // 优先使用 config.json 中的代理设置；若为空则不覆盖环境变量
-        if cfg.HTTPProxy != "" {
-            _ = os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
-            _ = os.Setenv("http_proxy", cfg.HTTPProxy)
-        }
-        if cfg.HTTPSProxy != "" {
-            _ = os.Setenv("HTTPS_PROXY", cfg.HTTPSProxy)
-            _ = os.Setenv("https_proxy", cfg.HTTPSProxy)
-        }
-        if cfg.NoProxy != "" {
-            _ = os.Setenv("NO_PROXY", cfg.NoProxy)
-            _ = os.Setenv("no_proxy", cfg.NoProxy)
-        }
-        if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
-            log.Printf("🌐 已配置代理: HTTP_PROXY=%s HTTPS_PROXY=%s", os.Getenv("HTTP_PROXY"), os.Getenv("HTTPS_PROXY"))
-        }
-    }
+	// 应用配置文件中的档位与 LLM 阈值（config.json 为主，env 作为覆盖）
+	if cfg := configFile; cfg != nil {
+		// 应用 llm 与交易阈值（config 为主，env 作为覆盖）
+		applyLLMFromConfig(cfg)
+		// 应用风险档位（仅在相关 env 与 llm 未显式设置时生效，作为补充默认）
+		if cfg.Profile != "" {
+			applyLLMProfile(cfg.Profile)
+		}
+		// 应用 HTTP/HTTPS 代理（如在受限网络环境）
+		// 优先使用 config.json 中的代理设置；若为空则不覆盖环境变量
+		if cfg.HTTPProxy != "" {
+			_ = os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
+			_ = os.Setenv("http_proxy", cfg.HTTPProxy)
+		}
+		if cfg.HTTPSProxy != "" {
+			_ = os.Setenv("HTTPS_PROXY", cfg.HTTPSProxy)
+			_ = os.Setenv("https_proxy", cfg.HTTPSProxy)
+		}
+		if cfg.NoProxy != "" {
+			_ = os.Setenv("NO_PROXY", cfg.NoProxy)
+			_ = os.Setenv("no_proxy", cfg.NoProxy)
+		}
+		if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
+			log.Printf("🌐 已配置代理: HTTP_PROXY=%s HTTPS_PROXY=%s", os.Getenv("HTTP_PROXY"), os.Getenv("HTTPS_PROXY"))
+		}
+	}
 
 	log.Printf("📋 初始化配置数据库: %s", dbPath)
 	database, err := config.NewDatabase(dbPath)
@@ -435,7 +436,12 @@ func main() {
 	}
 	log.Printf("🎚️  当前 Profile: %s | 预检: enabled=%s opp_min=%s ema_prox=%s symbol_min_interval_min=%s allow_per_scan=%s | temp=%s",
 		profile,
-		func() string { if os.Getenv("NOFX_PRECHECK_ENABLED") == "0" || strings.ToLower(os.Getenv("NOFX_PRECHECK_ENABLED"))=="false" { return "false" }; return "true" }(),
+		func() string {
+			if os.Getenv("NOFX_PRECHECK_ENABLED") == "0" || strings.ToLower(os.Getenv("NOFX_PRECHECK_ENABLED")) == "false" {
+				return "false"
+			}
+			return "true"
+		}(),
 		os.Getenv("NOFX_OPP_SCORE_MIN"),
 		os.Getenv("NOFX_EMA_PROX_PCT"),
 		os.Getenv("NOFX_SYMBOL_MIN_INTERVAL_MIN"),
@@ -522,142 +528,150 @@ func main() {
 		}
 	}
 
-    // 创建并启动API服务器
-    apiServer := api.NewServer(traderManager, database, apiPort)
+	// 创建并启动API服务器
+	apiServer := api.NewServer(traderManager, database, apiPort)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("❌ API服务器错误: %v", err)
 		}
 	}()
 
-    // 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
-    wsMonitor := market.NewWSMonitor(150)
+	// 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
+	wsMonitor := market.NewWSMonitor(150)
 
-    // 启动新闻抓取后台任务（基于 Telegram 频道）
-    news.SetDatabase(database)
-    {
-        // 从 config.json 中解析新闻配置（仅支持 provider == "telegram"）
-        var tgBaseURL string
-        var tgProxyURL string
-        var tgChannels []string
+	// 启动新闻抓取后台任务（基于 Telegram 频道）
+	news.SetDatabase(database)
+	{
+		// 从 config.json 中解析新闻配置（仅支持 provider == "telegram"）
+		var tgBaseURL string
+		var tgProxyURL string
+		var tgChannels []string
 
-        if configFile != nil {
-            for _, ns := range configFile.News {
-                if strings.ToLower(strings.TrimSpace(ns.Provider)) != "telegram" {
-                    continue
-                }
-                if ns.Telegram != nil {
-                    if ns.Telegram.BaseURL != "" {
-                        tgBaseURL = ns.Telegram.BaseURL
-                    }
-                    if ns.Telegram.ProxyURL != "" {
-                        tgProxyURL = ns.Telegram.ProxyURL
-                    }
-                }
-                for _, ch := range ns.Channels {
-                    id := strings.TrimSpace(ch.ID)
-                    if id != "" {
-                        tgChannels = append(tgChannels, id)
-                    }
-                }
-            }
-        }
+		if configFile != nil {
+			for _, ns := range configFile.News {
+				if strings.ToLower(strings.TrimSpace(ns.Provider)) != "telegram" {
+					continue
+				}
+				if ns.Telegram != nil {
+					if ns.Telegram.BaseURL != "" {
+						tgBaseURL = ns.Telegram.BaseURL
+					}
+					if ns.Telegram.ProxyURL != "" {
+						tgProxyURL = ns.Telegram.ProxyURL
+					}
+				}
+				for _, ch := range ns.Channels {
+					id := strings.TrimSpace(ch.ID)
+					if id != "" {
+						tgChannels = append(tgChannels, id)
+					}
+				}
+			}
+		}
 
-        // 若 config.json 中未配置频道，可选地从环境变量回退（兼容旧部署）
-        if len(tgChannels) == 0 {
-            if chEnv := os.Getenv("TELEGRAM_NEWS_CHANNELS"); strings.TrimSpace(chEnv) != "" {
-                parts := strings.Split(chEnv, ",")
-                for _, p := range parts {
-                    id := strings.TrimSpace(p)
-                    if id != "" {
-                        tgChannels = append(tgChannels, id)
-                    }
-                }
-            }
-        }
+		// 若 config.json 中未配置频道，可选地从环境变量回退（兼容旧部署）
+		if len(tgChannels) == 0 {
+			if chEnv := os.Getenv("TELEGRAM_NEWS_CHANNELS"); strings.TrimSpace(chEnv) != "" {
+				parts := strings.Split(chEnv, ",")
+				for _, p := range parts {
+					id := strings.TrimSpace(p)
+					if id != "" {
+						tgChannels = append(tgChannels, id)
+					}
+				}
+			}
+		}
 
-        if len(tgChannels) > 0 {
-            log.Printf("✓ 配置 Telegram 新闻源频道: %v", tgChannels)
-            news.StartWorker(database, tgBaseURL, tgProxyURL, tgChannels)
-        } else {
-            log.Printf("💡 未配置 Telegram 新闻频道，新闻抓取 Worker 未启动")
-        }
-    }
-	
+		if len(tgChannels) > 0 {
+			log.Printf("✓ 配置 Telegram 新闻源频道: %v", tgChannels)
+			news.StartWorker(database, tgBaseURL, tgProxyURL, tgChannels)
+		} else {
+			log.Printf("💡 未配置 Telegram 新闻频道，新闻抓取 Worker 未启动")
+		}
+	}
+
 	// 加载并启用异常监控配置
 	anomalyConfig, err := config.LoadAnomalyConfig(database)
 	if err != nil {
 		log.Printf("⚠️  加载异常监控配置失败: %v", err)
 	} else if anomalyConfig.IsEnabled() {
-            // 先设置异常监控配置（供阈值分层使用），再启用
-            wsMonitor.SetAnomalyConfig(anomalyConfig)
+		// 先设置异常监控配置（供阈值分层使用），再启用
+		wsMonitor.SetAnomalyConfig(anomalyConfig)
 
-            // 启用异常监控（阈值可能在内部按币种分层调整）
-            wsMonitor.EnableAnomalyDetection(
-                anomalyConfig.GetPriceThreshold(),
-                anomalyConfig.GetVolumeMultiplier(),
-                anomalyConfig.GetConsecutiveThreshold(),
-                anomalyConfig.GetMinVolumeUSDT(),
-                anomalyConfig.GetCoolingPeriodMinutes(),
-                anomalyConfig.GetAbsMinPriceChangePct(),
-                anomalyConfig.GetCoolingPeriodMinutes(), // 动作冷却与检测冷却一致，后续可独立配置
-            )
-            log.Printf("✅ 异常监控配置：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
-		
+		// 启用异常监控（阈值可能在内部按币种分层调整）
+		wsMonitor.EnableAnomalyDetection(
+			anomalyConfig.GetPriceThreshold(),
+			anomalyConfig.GetVolumeMultiplier(),
+			anomalyConfig.GetConsecutiveThreshold(),
+			anomalyConfig.GetMinVolumeUSDT(),
+			anomalyConfig.GetCoolingPeriodMinutes(),
+			anomalyConfig.GetAbsMinPriceChangePct(),
+			anomalyConfig.GetCoolingPeriodMinutes(), // 动作冷却与检测冷却一致，后续可独立配置
+		)
+		log.Printf("✅ 异常监控配置：模式=%s, 灵敏度=%s", anomalyConfig.Mode, anomalyConfig.Sensitivity)
+
 		// 设置依赖（Phase 3）
-        // 加载 AI 模型配置（按用户优先级选择已启用模型）：
-        // 1) admin 模式优先使用 admin 用户；2) 其次 default；3) 再遍历其余用户的已启用模型
-        var aiModelConfig *config.AIModelConfig
-        var candidateUsers []string
-        if adminMode { candidateUsers = append(candidateUsers, "admin") }
-        candidateUsers = append(candidateUsers, "default")
-        if allUsers, e := database.GetAllUsers(); e == nil {
-            for _, u := range allUsers {
-                // 去重：避免重复加入 admin/default
-                if u == "admin" || u == "default" { continue }
-                candidateUsers = append(candidateUsers, u)
-            }
-        }
-        for _, uid := range candidateUsers {
-            models, e := database.GetAIModels(uid)
-            if e != nil || len(models) == 0 { continue }
-            for _, m := range models {
-                if m.Enabled {
-                    aiModelConfig = m
-                    break
-                }
-            }
-            if aiModelConfig != nil { break }
-        }
-		
+		// 加载 AI 模型配置（按用户优先级选择已启用模型）：
+		// 1) admin 模式优先使用 admin 用户；2) 其次 default；3) 再遍历其余用户的已启用模型
+		var aiModelConfig *config.AIModelConfig
+		var candidateUsers []string
+		if adminMode {
+			candidateUsers = append(candidateUsers, "admin")
+		}
+		candidateUsers = append(candidateUsers, "default")
+		if allUsers, e := database.GetAllUsers(); e == nil {
+			for _, u := range allUsers {
+				// 去重：避免重复加入 admin/default
+				if u == "admin" || u == "default" {
+					continue
+				}
+				candidateUsers = append(candidateUsers, u)
+			}
+		}
+		for _, uid := range candidateUsers {
+			models, e := database.GetAIModels(uid)
+			if e != nil || len(models) == 0 {
+				continue
+			}
+			for _, m := range models {
+				if m.Enabled {
+					aiModelConfig = m
+					break
+				}
+			}
+			if aiModelConfig != nil {
+				break
+			}
+		}
+
 		// 创建 MCP 客户端
 		mcpClient := mcp.New()
-        if aiModelConfig != nil {
-            // 根据模型类型配置 MCP 客户端
-            if aiModelConfig.Provider == "deepseek" {
-                mcpClient.SetDeepSeekAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
-            } else if aiModelConfig.Provider == "qwen" {
-                mcpClient.SetQwenAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
-            } else if aiModelConfig.Provider == "custom" {
-                mcpClient.SetCustomAPI(aiModelConfig.CustomAPIURL, aiModelConfig.APIKey, aiModelConfig.CustomModelName)
-            }
-        }
-		
+		if aiModelConfig != nil {
+			// 根据模型类型配置 MCP 客户端
+			if aiModelConfig.Provider == "deepseek" {
+				mcpClient.SetDeepSeekAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
+			} else if aiModelConfig.Provider == "qwen" {
+				mcpClient.SetQwenAPIKey(aiModelConfig.APIKey, aiModelConfig.CustomAPIURL, aiModelConfig.CustomModelName)
+			} else if aiModelConfig.Provider == "custom" {
+				mcpClient.SetCustomAPI(aiModelConfig.CustomAPIURL, aiModelConfig.APIKey, aiModelConfig.CustomModelName)
+			}
+		}
+
 		// 设置依赖
 		wsMonitor.SetDependencies(traderManager, aiModelConfig, mcpClient)
-		
+
 		// 创建并设置 LLM 评估器适配器（解决导入循环问题）
-        if aiModelConfig != nil && anomalyConfig.GetUseLLM() {
-            evaluatorAdapter := decision.NewAnomalyEvaluatorAdapter(mcpClient)
-            wsMonitor.SetLLMEvaluator(evaluatorAdapter)
-            log.Printf("✅ LLM评估器已设置（使用 %s 模型，user=%s）", aiModelConfig.Provider, aiModelConfig.UserID)
-        } else {
-            log.Printf("💡 LLM评估器未设置（AI模型未配置或LLM未启用）")
-        }
+		if aiModelConfig != nil && anomalyConfig.GetUseLLM() {
+			evaluatorAdapter := decision.NewAnomalyEvaluatorAdapter(mcpClient)
+			wsMonitor.SetLLMEvaluator(evaluatorAdapter)
+			log.Printf("✅ LLM评估器已设置（使用 %s 模型，user=%s）", aiModelConfig.Provider, aiModelConfig.UserID)
+		} else {
+			log.Printf("💡 LLM评估器未设置（AI模型未配置或LLM未启用）")
+		}
 	} else {
 		log.Printf("⏸️  异常监控已禁用（模式：%s）", anomalyConfig.Mode)
 	}
-	
+
 	go wsMonitor.Start(database.GetCustomCoins())
 	//go market.NewWSMonitor(150).Start([]string{}) //这里是一个使用方式 传入空的话 则使用market市场的所有币种
 	// 设置优雅退出

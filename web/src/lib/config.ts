@@ -1,6 +1,10 @@
 export interface SystemConfig {
   admin_mode: boolean
   beta_mode: boolean
+  default_coins?: string[]
+  btc_eth_leverage?: number
+  altcoin_leverage?: number
+  profile?: string
 }
 
 let configPromise: Promise<SystemConfig> | null = null

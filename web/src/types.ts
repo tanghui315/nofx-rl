@@ -77,6 +77,14 @@ export interface DecisionRecord {
   execution_log: string[]
   success: boolean
   error_message?: string
+  // Regime / routing / PreCheck metadata (optional)
+  regime_type?: string
+  regime_confidence?: number
+  route?: string
+  route_template?: string
+  route_constraints?: Record<string, any>
+  precheck_allowed?: string[]
+  precheck_reasons?: string[]
 }
 
 export interface Statistics {

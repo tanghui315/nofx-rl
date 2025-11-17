@@ -5,9 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"log"
+	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -963,15 +964,15 @@ func (t *FuturesTrader) ListOpenOrders(symbol string) ([]map[string]interface{},
 	var out []map[string]interface{}
 	for _, o := range orders {
 		item := map[string]interface{}{
-			"orderId":    o.OrderID,
-			"symbol":     o.Symbol,
-			"status":     o.Status,
-			"type":       o.Type,
-			"side":       o.Side,
-			"price":      o.Price,
-			"origQty":    o.OrigQuantity,
+			"orderId":     o.OrderID,
+			"symbol":      o.Symbol,
+			"status":      o.Status,
+			"type":        o.Type,
+			"side":        o.Side,
+			"price":       o.Price,
+			"origQty":     o.OrigQuantity,
 			"executedQty": o.ExecutedQuantity,
-			"updateTime": o.UpdateTime,
+			"updateTime":  o.UpdateTime,
 		}
 		out = append(out, item)
 	}
@@ -1230,12 +1231,20 @@ func (t *FuturesTrader) OpenLongLimit(symbol string, quantity float64, leverage 
 	if err != nil {
 		return nil, err
 	}
+	// TimeInForce: 默认 GTC，可通过 NOFX_LIMIT_TIF=GTC|IOC|FOK 调整
+	tif := futures.TimeInForceTypeGTC
+	switch strings.ToUpper(strings.TrimSpace(os.Getenv("NOFX_LIMIT_TIF"))) {
+	case "IOC":
+		tif = futures.TimeInForceTypeIOC
+	case "FOK":
+		tif = futures.TimeInForceTypeFOK
+	}
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeBuy).
 		PositionSide(futures.PositionSideTypeLong).
 		Type(futures.OrderTypeLimit).
-		TimeInForce(futures.TimeInForceTypeGTC).
+		TimeInForce(tif).
 		Price(priceStr).
 		Quantity(qtyStr).
 		NewClientOrderID(getBrOrderID()).
@@ -1272,12 +1281,20 @@ func (t *FuturesTrader) OpenShortLimit(symbol string, quantity float64, leverage
 	if err != nil {
 		return nil, err
 	}
+	// TimeInForce: 默认 GTC，可通过 NOFX_LIMIT_TIF=GTC|IOC|FOK 调整
+	tif := futures.TimeInForceTypeGTC
+	switch strings.ToUpper(strings.TrimSpace(os.Getenv("NOFX_LIMIT_TIF"))) {
+	case "IOC":
+		tif = futures.TimeInForceTypeIOC
+	case "FOK":
+		tif = futures.TimeInForceTypeFOK
+	}
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeSell).
 		PositionSide(futures.PositionSideTypeShort).
 		Type(futures.OrderTypeLimit).
-		TimeInForce(futures.TimeInForceTypeGTC).
+		TimeInForce(tif).
 		Price(priceStr).
 		Quantity(qtyStr).
 		NewClientOrderID(getBrOrderID()).

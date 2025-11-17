@@ -551,6 +551,7 @@ function App() {
             traders={traders}
             selectedTraderId={selectedTraderId}
             onTraderSelect={setSelectedTraderId}
+            systemProfile={systemConfig?.profile}
           />
         )}
       </main>
@@ -629,7 +630,27 @@ function TraderDetailsPage({
   stats?: Statistics
   lastUpdate: string
   language: Language
+  systemProfile?: string
 }) {
+  const [profile, setProfile] = useState(systemProfile || 'balanced')
+  const { data: devPendingLimits } = useSWR<any>(
+    selectedTrader ? `dev-pending-${selectedTrader.trader_id}` : null,
+    () => api.devGetPendingLimits(selectedTrader!.trader_id),
+    {
+      refreshInterval: 30000,
+      revalidateOnFocus: false,
+      dedupingInterval: 20000,
+    }
+  )
+  const { data: devRegime } = useSWR<any>(
+    selectedTrader ? `dev-regime-btc-${selectedTrader.trader_id}` : null,
+    () => api.devGetRegime({ traderId: selectedTrader!.trader_id, symbols: ['BTCUSDT'], includeNews: true }),
+    {
+      refreshInterval: 60000,
+      revalidateOnFocus: false,
+      dedupingInterval: 60000,
+    }
+  )
   if (!selectedTrader) {
     return (
       <div className="space-y-6">
@@ -712,33 +733,57 @@ function TraderDetailsPage({
           )}
         </div>
         <div
-          className="flex items-center gap-4 text-sm"
+          className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-sm"
           style={{ color: '#848E9C' }}
         >
-          <span>
-            AI Model:{' '}
-            <span
-              className="font-semibold"
+          <div className="flex items-center gap-4">
+            <span>
+              AI Model:{' '}
+              <span
+                className="font-semibold"
+                style={{
+                  color: selectedTrader.ai_model.includes('qwen')
+                    ? '#c084fc'
+                    : '#60a5fa',
+                }}
+              >
+                {getModelDisplayName(
+                  selectedTrader.ai_model.split('_').pop() ||
+                    selectedTrader.ai_model
+                )}
+              </span>
+            </span>
+            {status && (
+              <>
+                <span>•</span>
+                <span>Cycles: {status.call_count}</span>
+                <span>•</span>
+                <span>Runtime: {status.runtime_minutes} min</span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span>Risk Profile:</span>
+            <select
+              value={profile}
+              onChange={(e) => setProfile(e.target.value)}
+              className="rounded px-2 py-1 text-xs font-medium cursor-pointer"
               style={{
-                color: selectedTrader.ai_model.includes('qwen')
-                  ? '#c084fc'
-                  : '#60a5fa',
+                background: '#1E2329',
+                border: '1px solid #2B3139',
+                color: '#EAECEF',
               }}
             >
-              {getModelDisplayName(
-                selectedTrader.ai_model.split('_').pop() ||
-                  selectedTrader.ai_model
-              )}
+              <option value="ultra_safe">ultra_safe</option>
+              <option value="safe">safe</option>
+              <option value="balanced">balanced</option>
+              <option value="bold">bold</option>
+              <option value="ultra_bold">ultra_bold</option>
+            </select>
+            <span className="text-[11px]" style={{ color: '#5E6673' }}>
+              (当前生效以 server config.json / env 为准)
             </span>
-          </span>
-          {status && (
-            <>
-              <span>•</span>
-              <span>Cycles: {status.call_count}</span>
-              <span>•</span>
-              <span>Runtime: {status.runtime_minutes} min</span>
-            </>
-          )}
+          </div>
         </div>
       </div>
 
@@ -755,6 +800,26 @@ function TraderDetailsPage({
             {account?.total_pnl?.toFixed(2) || '0.00'} (
             {account?.total_pnl_pct?.toFixed(2) || '0.00'}%)
           </div>
+          {devRegime && (
+            <div className="mt-1" style={{ color: '#848E9C' }}>
+              📰 BTC NewsScore:{' '}
+              {typeof devRegime.news_score_btc === 'number'
+                ? devRegime.news_score_btc.toFixed(2)
+                : devRegime.news_score_btc ?? '-'}
+              {Array.isArray(devRegime.opportunities) &&
+                devRegime.opportunities.length > 0 &&
+                devRegime.opportunities[0].news &&
+                devRegime.opportunities[0].news.length > 0 && (
+                  <>
+                    {' '}
+                    | {devRegime.opportunities[0].news[0].title}
+                    {devRegime.opportunities[0].news[0].source && (
+                      <> ({devRegime.opportunities[0].news[0].source})</>
+                    )}
+                  </>
+                )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1026,8 +1091,86 @@ function TraderDetailsPage({
               </div>
             )}
           </div>
+      </div>
+      {/* 右侧结束 */}
+      </div>
+
+      {/* Pending Limit Orders (Enhanced View) */}
+      <div className="mt-6 mb-6 animate-slide-in" style={{ animationDelay: '0.25s' }}>
+        <div
+          className="binance-card p-6"
+          style={{
+            background: '#1E2329',
+            border: '1px solid #2B3139',
+          }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold" style={{ color: '#EAECEF' }}>
+              Pending Limit Orders
+            </h3>
+            <span className="text-xs" style={{ color: '#848E9C' }}>
+              数据来自 /api/dev/pending_limits（只读调试视图）
+            </span>
+          </div>
+          {devPendingLimits && Array.isArray(devPendingLimits.pending_limits) && devPendingLimits.pending_limits.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b" style={{ borderColor: '#2B3139', color: '#848E9C' }}>
+                    <th className="pb-2 text-left">Order ID</th>
+                    <th className="pb-2 text-left">Symbol</th>
+                    <th className="pb-2 text-left">Action</th>
+                    <th className="pb-2 text-right">Qty</th>
+                    <th className="pb-2 text-right">Limit Price</th>
+                    <th className="pb-2 text-right">Leverage</th>
+                    <th className="pb-2 text-right">SL / TP</th>
+                    <th className="pb-2 text-right">Expire At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {devPendingLimits.pending_limits.map((p: any, idx: number) => (
+                    <tr
+                      key={idx}
+                      className="border-b last:border-0"
+                      style={{ borderColor: '#2B3139', color: '#EAECEF' }}
+                    >
+                      <td className="py-1 font-mono">{p.order_id}</td>
+                      <td className="py-1 font-mono">{p.symbol}</td>
+                      <td className="py-1 font-mono">{p.action}</td>
+                      <td className="py-1 font-mono text-right">
+                        {typeof p.quantity === 'number'
+                          ? p.quantity.toFixed(4)
+                          : p.quantity}
+                      </td>
+                      <td className="py-1 font-mono text-right">
+                        {typeof p.limit_price === 'number'
+                          ? p.limit_price.toFixed(4)
+                          : p.limit_price}
+                      </td>
+                      <td className="py-1 font-mono text-right">{p.leverage}x</td>
+                      <td className="py-1 font-mono text-right">
+                        {p.stop_loss ? p.stop_loss.toFixed(4) : '-'}
+                        <span className="mx-1" style={{ color: '#848E9C' }}>
+                          /
+                        </span>
+                        {p.take_profit ? p.take_profit.toFixed(4) : '-'}
+                      </td>
+                      <td className="py-1 font-mono text-right">
+                        {p.expire_at
+                          ? new Date(p.expire_at).toLocaleTimeString()
+                          : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-xs" style={{ color: '#848E9C' }}>
+              当前没有挂着的限价开仓单。
+            </div>
+          )}
         </div>
-        {/* 右侧结束 */}
       </div>
 
       {/* AI Learning & Performance Analysis */}
@@ -1138,6 +1281,55 @@ function DecisionCard({
           </div>
         </div>
       </div>
+
+      {/* Regime & Route Summary */}
+      {(decision.regime_type || decision.route || decision.route_template) && (
+        <div
+          className="flex flex-wrap items-center gap-2 mb-3 text-[11px]"
+          style={{ color: '#848E9C' }}
+        >
+          {decision.regime_type && (
+            <span
+              className="px-2 py-0.5 rounded-full border"
+              style={{ borderColor: '#2B3139' }}
+            >
+              Regime: {decision.regime_type}
+              {typeof decision.regime_confidence === 'number' &&
+                ` (${decision.regime_confidence})`}
+            </span>
+          )}
+          {decision.route && (
+            <span
+              className="px-2 py-0.5 rounded-full border"
+              style={{ borderColor: '#2B3139' }}
+            >
+              Route: {decision.route}
+            </span>
+          )}
+          {decision.route_template && (
+            <span
+              className="px-2 py-0.5 rounded-full border max-w-[220px] truncate"
+              style={{ borderColor: '#2B3139' }}
+              title={decision.route_template}
+            >
+              Template: {decision.route_template}
+            </span>
+          )}
+          {decision.route_constraints &&
+            (decision.route_constraints as any).btc_soft_channel && (
+              <span
+                className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                style={{
+                  background: 'rgba(96, 165, 250, 0.12)',
+                  color: '#60a5fa',
+                  border: '1px solid rgba(96, 165, 250, 0.4)',
+                }}
+              >
+                BTC Soft Channel
+              </span>
+            )}
+        </div>
+      )}
 
       {/* Input Prompt - Collapsible */}
       {decision.input_prompt && (
