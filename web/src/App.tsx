@@ -1265,6 +1265,37 @@ function DecisionCard({
   const [showInputPrompt, setShowInputPrompt] = useState(false)
   const [showCoT, setShowCoT] = useState(false)
 
+  // 根据后端传入的 route / route_constraints 生成一行简要说明，
+  // 方便在查看策略内容前，先理解本轮走的是哪条路线、核心约束是什么。
+  let routeSummary = ''
+  if (decision.route) {
+    const c = (decision.route_constraints || {}) as any
+    const parts: string[] = []
+    // 基础：路由名
+    parts.push(decision.route)
+    // 订单类型
+    if (typeof c.default_order === 'string') {
+      if (c.default_order === 'limit') {
+        parts.push('限价')
+      } else if (c.default_order === 'market') {
+        parts.push('市价')
+      }
+    }
+    // 最小 RR
+    if (typeof c.rr_min === 'number' && !Number.isNaN(c.rr_min)) {
+      parts.push(`RR≥${c.rr_min.toFixed(1)}`)
+    }
+    // 风险百分比上限
+    if (typeof c.risk_pct_max === 'number' && !Number.isNaN(c.risk_pct_max)) {
+      parts.push(`风险≤${c.risk_pct_max.toFixed(1)}%`)
+    }
+    // 贴近 EMA20 要求
+    if (typeof c.ema_near_pct === 'number' && c.ema_near_pct > 0 && !Number.isNaN(c.ema_near_pct)) {
+      parts.push(`需贴近 EMA20(${c.ema_near_pct.toFixed(1)}%)`)
+    }
+    routeSummary = parts.join(' · ')
+  }
+
   return (
     <div
       className="rounded p-5 transition-all duration-300 hover:translate-y-[-2px]"
@@ -1353,6 +1384,18 @@ function DecisionCard({
                 BTC Soft Channel
               </span>
             )}
+        </div>
+      )}
+
+      {/* Execution Route Summary - 在策略内容前，用一行文字概览当前执行路线 */}
+      {routeSummary && (
+        <div className="mb-2 text-[11px]">
+          <div className="font-semibold" style={{ color: '#EAECEF' }}>
+            执行路线
+          </div>
+          <div className="mt-0.5 mono" style={{ color: '#848E9C' }}>
+            {routeSummary}
+          </div>
         </div>
       )}
 

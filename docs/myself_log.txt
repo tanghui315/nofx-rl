@@ -1,0 +1,164 @@
+为什么是观察者模式， 怎么才能触发开仓行为
+
+
+• 现在是“观察者模式”的原因，其实就是代码里有一条专门把 range_grid 挡掉的逻辑，你每次看到的那句：
+
+  - 🟡 wait: route=range_grid 默认不调用LLM（预留规则化管理）
+
+  就是它的直接体现。
+
+  我分两步说：
+
+  ———
+
+  1. 为什么现在是“只看不下单”的观察模式？
+
+  关键代码在 trader/auto_trader.go:708 附近：
+
+  // 若为 carry 或 range，默认不唤起 LLM（等待后续规则化管理），仅记录
+  if preCheckEnabled && ctx.Account.PositionCount == 0 {
+      if route.Route == decision.RouteTrendCarry || route.Route == decision.RouteRangeGrid {
+          msg := fmt.Sprintf("wait: route=%s 默认不调用LLM（预留规则化管理）", route.Route)
+          log.Printf("🟡 %s", msg)
+          record.ExecutionLog = append(record.ExecutionLog, msg)
+          record.PreCheckReasons = append(record.PreCheckReasons, "route_no_llm")
+          // metrics 统计...
+          record.Success = true
+          at.decisionLogger.LogDecision(record)
+          return nil
+      }
+  }
+
+  含义：
+
+  - 当：
+      - PreCheck 开着（NOFX_PRECHECK_ENABLED 没关），且
+      - 当前没有持仓（PositionCount == 0），且
+      - 路由为 trend_carry 或 range_grid
+  - 就直接 return nil，不调 LLM / Agent，等于“记录一下 Regime/Route，但本轮只 wait，不出单”。
+
+  这就是你看到的“route=range_grid + wait”，实盘上自然不会有任何开仓行为。
+
+  当初这样做，是因为：
+
+  - carry 和 range_grid 理论上应该是“规则化执行为主”，避免在这些阶段频繁调 LLM；
+  - 而 range_grid 又是新策略，按 TECH_PLAN 是在后面的灰度阶段才真正放开自动开单，所以先挂一个标
+    签、看数据，不直接下单。
+
+  ———
+
+  2. 怎么才能让 range_grid 真正触发开仓？
+
+  有两种难度不同的方式，你可以选一种：
+
+  ———
+
+  方式 A：最快捷的测试办法 —— 直接关掉 PreCheck
+
+  把整个 PreCheck 门禁关掉，所有 route（包括 range_grid）都会正常走到 LLM / Agent。
+
+  - 设置环境变量（启动前）：
+      - 在你的 shell 里：
+
+        export NOFX_PRECHECK_ENABLED=false
+        # 或者
+        export NOFX_PRECHECK_ENABLED=0
+      - 然后重启服务。
+
+  效果：
+
+  - 这两段 PreCheck 逻辑全部跳过：
+      - route_no_llm 那个分支；
+      - opp_score 机会分筛选分支。
+  - 每个扫描周期都会直接走到“智能决策”部分：
+      - useAgent := route.Agent（range_grid 是 false）
+      - 然后调用：
+
+        decision.GetFullDecisionWithCustomPrompt(..., templateName)
+        这里的 templateName 会被设成 range_grid/prompt_range_grid。
+  - LLM 接到的是专用的 range_grid 模板（你看到的 prompts/range_grid/prompt_range_grid.txt），里面
+    已经约定：
+      - 只能用 order_type="limit"；
+      - limit_price 贴近区间边缘 / EMA/VWAP；
+      - 满足系统硬风控和绝对净利阈值。
+
+  只要 LLM 根据这个模板输出 open_long/open_short 决策，并通过引擎校验，就会真正发起开仓（限价网
+  格单）。
+
+  这是“最快能看到 range_grid 出单”的方式，但缺点是：
+
+  - 所有 route 都会不再受 PreCheck 限制，LLM 调用频率会明显上升。
+
+  ———
+
+  方式 B：保留 PreCheck，只对 range_grid 放开
+
+  如果你想保留 PreCheck 的 opp_score 门禁，只是让 range_grid 不再被强行 wait，可以改一处代码：
+
+  把上面这段：
+
+  if preCheckEnabled && ctx.Account.PositionCount == 0 {
+      if route.Route == decision.RouteTrendCarry || route.Route == decision.RouteRangeGrid {
+          msg := fmt.Sprintf("wait: route=%s 默认不调用LLM（预留规则化管理）", route.Route)
+          ...
+          return nil
+      }
+  }
+
+  改成只拦 trend_carry，放行 range_grid，例如：
+
+  if preCheckEnabled && ctx.Account.PositionCount == 0 {
+      if route.Route == decision.RouteTrendCarry {
+          msg := fmt.Sprintf("wait: route=%s 默认不调用LLM（预留规则化管理）", route.Route)
+          ...
+          return nil
+      }
+  }
+
+  或者加一个开关，只在你显式打开 range_grid 时才放行，比如：
+
+  enableRangeGrid := os.Getenv("NOFX_RANGE_GRID_LIVE") == "1"
+
+  if preCheckEnabled && ctx.Account.PositionCount == 0 {
+      if route.Route == decision.RouteTrendCarry ||
+          (route.Route == decision.RouteRangeGrid && !enableRangeGrid) {
+          msg := fmt.Sprintf("wait: route=%s 默认不调用LLM（预留规则化管理）", route.Route)
+          ...
+          return nil
+      }
+  }
+
+  然后：
+
+  export NOFX_RANGE_GRID_LIVE=1
+
+  这样：
+
+  - trend_carry 仍然保持“观察模式”；
+  - range_grid 在 NOFX_RANGE_GRID_LIVE=1 时，会继续走后面的 opp_score 逻辑：
+      - 机会分达标 → ✅ PreCheck: ... route=range_grid | mode=llm；
+      - 再调用 LLM，用 range_grid 模板出限价单。
+
+  注意点：
+
+  - 即使放开这层，range_grid 想真正“开仓”还要满足：
+      - PreCheck 的 opp_score >= NOFX_OPP_SCORE_MIN（默认 8）；
+      - 绝对净利阈值 & 名义/步长校验（在引擎和执行层）；
+      - LLM 根据模板输出正确格式的决策。
+  - 对于网格策略，opp_score 的默认阈值可能偏高，你实测时可以适当下调一点，例如：
+
+    export NOFX_OPP_SCORE_MIN=6
+
+  ———
+
+  总结一下
+
+  - 现在之所以是“观察者模式”，是因为有一段硬编码把 range_grid 在无持仓时直接挡掉，仅记录 wait，不
+    调 LLM。
+  - 要让它真正开始开仓，有两个层次：
+      1. 快速测试：NOFX_PRECHECK_ENABLED=false，让所有 route（包括 range_grid）每轮都进 LLM。
+      2. 更精细：修改 route_no_llm 分支，只拦 trend_carry，或者加 NOFX_RANGE_GRID_LIVE=1 的开关，
+         对 range_grid 放行。
+
+  如果你希望我直接按“方式 B + NOFX_RANGE_GRID_LIVE 开关”的方案帮你改好代码，我可以再下一步给出具体
+  patch，或者直接帮你改。

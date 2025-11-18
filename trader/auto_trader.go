@@ -782,6 +782,16 @@ func (at *AutoTrader) runCycle() error {
 		"default_order":    route.Constraints.DefaultOrderType,
 		"btc_soft_channel": route.Constraints.BTCSoftChannel,
 	}
+	// 控制台可视化：每个周期都打印一次 Regime / Route 选择结果，便于观察策略路由是否生效
+	log.Printf("🔀 Regime/Route: regime=%s(%d) | route=%s | template=%s | rr_min=%.1f | risk_pct_max=%.1f | default_order=%s",
+		regime.Type,
+		regime.Confidence,
+		route.Route,
+		route.TemplatePath,
+		route.Constraints.RRMin,
+		route.Constraints.RiskPctMax,
+		route.Constraints.DefaultOrderType,
+	)
 	// 若为 carry 或 range，默认不唤起 LLM（等待后续规则化管理），仅记录
 	if preCheckEnabled && ctx.Account.PositionCount == 0 {
 		if route.Route == decision.RouteTrendCarry || route.Route == decision.RouteRangeGrid {
@@ -894,13 +904,24 @@ func (at *AutoTrader) runCycle() error {
 			}
 			_ = os.Setenv("NOFX_AGENT_REQUIRE_EMA_NEAR", reqEma)
 		}
-		log.Printf("✅ PreCheck: 触发智能决策 (%d 个符号): %v | Regime=%s(%d) | mode=%s", len(allowedSymbols), allowedSymbols, regime.Type, regime.Confidence, func() string {
+		log.Printf("✅ PreCheck: 触发智能决策 (%d 个符号): %v | Regime=%s(%d) | route=%s | mode=%s",
+			len(allowedSymbols),
+			allowedSymbols,
+			regime.Type,
+			regime.Confidence,
+			route.Route,
+			func() string {
 			if route.Agent {
 				return "agent"
 			}
 			return "llm"
 		}())
-		record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("precheck: allow=%v | regime=%s(%d) | mode=%s", allowedSymbols, regime.Type, regime.Confidence, func() string {
+		record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("precheck: allow=%v | regime=%s(%d) | route=%s | mode=%s",
+			allowedSymbols,
+			regime.Type,
+			regime.Confidence,
+			route.Route,
+			func() string {
 			if route.Agent {
 				return "agent"
 			}

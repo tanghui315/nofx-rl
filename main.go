@@ -674,20 +674,35 @@ func main() {
 
 	go wsMonitor.Start(database.GetCustomCoins())
 	//go market.NewWSMonitor(150).Start([]string{}) //这里是一个使用方式 传入空的话 则使用market市场的所有币种
-	// 设置优雅退出
+
+	// 设置优雅退出：第一次 Ctrl+C 触发优雅关闭；第二次 Ctrl+C 直接强制退出
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	shutdownDone := make(chan struct{})
 
 	// TODO: 启动数据库中配置为运行状态的交易员
 	// traderManager.StartAll()
 
-	// 等待退出信号
-	<-sigChan
-	fmt.Println()
-	fmt.Println()
-	log.Println("📛 收到退出信号，正在停止所有trader...")
-	traderManager.StopAll()
+	go func() {
+		sigCount := 0
+		for {
+			sig := <-sigChan
+			sigCount++
+			if sigCount == 1 {
+				log.Printf("📛 收到退出信号 (%v)，开始优雅停止所有 Trader...", sig)
+				go func() {
+					traderManager.StopAll()
+					fmt.Println()
+					fmt.Println("👋 感谢使用AI交易系统！")
+					close(shutdownDone)
+				}()
+			} else {
+				log.Println("⚠️ 再次收到退出信号，立即强制退出")
+				os.Exit(1)
+			}
+		}
+	}()
 
-	fmt.Println()
-	fmt.Println("👋 感谢使用AI交易系统！")
+	// 阻塞主协程，直到优雅退出完成或被二次信号强制终止
+	<-shutdownDone
 }
