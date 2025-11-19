@@ -591,16 +591,17 @@ func (tm *TraderManager) getConcurrentTraderData(traders []*trader.AutoTrader) [
 			case account := <-accountChan:
 				// 成功获取账户信息
 				traderData = map[string]interface{}{
-					"trader_id":       trader.GetID(),
-					"trader_name":     trader.GetName(),
-					"ai_model":        trader.GetAIModel(),
-					"exchange":        trader.GetExchange(),
-					"total_equity":    account["total_equity"],
-					"total_pnl":       account["total_pnl"],
-					"total_pnl_pct":   account["total_pnl_pct"],
-					"position_count":  account["position_count"],
-					"margin_used_pct": account["margin_used_pct"],
-					"is_running":      status["is_running"],
+					"trader_id":        trader.GetID(),
+					"trader_name":      trader.GetName(),
+					"ai_model":         trader.GetAIModel(),
+					"exchange":         trader.GetExchange(),
+					"total_equity":     account["total_equity"],
+					"total_pnl":        account["total_pnl"],
+					"total_pnl_pct":    account["total_pnl_pct"],
+					"position_count":   account["position_count"],
+					"margin_used_pct":  account["margin_used_pct"],
+					"is_running":       status["is_running"],
+					"strategy_routing": status["strategy_routing"], // 透传路由信息
 				}
 			case err := <-errorChan:
 				// 获取账户信息失败

@@ -11,6 +11,22 @@ export interface SystemStatus {
   stop_until: string
   last_reset_time: string
   ai_provider: string
+  strategy_routing?: { [symbol: string]: string } // 新增：策略路由信息
+}
+
+export interface OpenOrder {
+  symbol: string
+  orderId: number
+  clientOrderId: string
+  side: string
+  positionSide: string
+  type: string
+  price: number
+  origQty: number
+  executedQty: number
+  status: string
+  time: number
+  updateTime: number
 }
 
 export interface AccountInfo {
@@ -46,6 +62,7 @@ export interface Position {
 export interface DecisionAction {
   action: string
   symbol: string
+  strategy_code?: string // 新增：策略代码
   quantity: number
   leverage: number
   price: number
@@ -64,6 +81,7 @@ export interface AccountSnapshot {
 }
 
 export interface DecisionRecord {
+  source?: string // 新增
   timestamp: string
   cycle_number: number
   input_prompt: string
@@ -97,6 +115,7 @@ export interface TraderInfo {
   custom_prompt?: string
   use_coin_pool?: boolean
   use_oi_top?: boolean
+  strategy_routing?: { [symbol: string]: string } // 新增
 }
 
 export interface AIModel {

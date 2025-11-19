@@ -39,6 +39,8 @@ type PositionInfo struct {
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
 	UpdateTime       int64   `json:"update_time"` // 持仓更新时间戳（毫秒）
+	StopLoss         float64 `json:"stop_loss"`   // 当前止损价
+	TakeProfit       float64 `json:"take_profit"` // 当前止盈价
 }
 
 // AccountInfo 账户信息
@@ -100,6 +102,12 @@ type Decision struct {
 	Symbol string `json:"symbol"`
 	Action string `json:"action"` // "open_long", "open_short", "close_long", "close_short", "update_stop_loss", "update_take_profit", "partial_close", "hold", "wait"
 
+	// 订单参数 (新增)
+	OrderType   string  `json:"order_type,omitempty"`    // "market", "limit" (默认market)
+	LimitPrice  float64 `json:"limit_price,omitempty"`   // 限价单必填
+	TimeInForce string  `json:"time_in_force,omitempty"` // "GTC", "IOC", "FOK" (默认GTC)
+	PostOnly    bool    `json:"post_only,omitempty"`     // 仅做Maker (限价单有效)
+
 	// 开仓参数
 	Leverage        int     `json:"leverage,omitempty"`
 	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
@@ -115,6 +123,9 @@ type Decision struct {
 	Confidence int     `json:"confidence,omitempty"` // 信心度 (0-100)
 	RiskUSD    float64 `json:"risk_usd,omitempty"`   // 最大美元风险
 	Reasoning  string  `json:"reasoning"`
+	
+	// 策略路由信息 (新增，用于前端展示)
+	StrategyCode string `json:"strategy_code,omitempty"` // e.g., "trend_carry", "range_grid"
 }
 
 // FullDecision AI的完整决策（包含思维链）
@@ -391,10 +402,24 @@ func buildUserPrompt(ctx *Context) string {
 
 			// 显示数量与仓位价值，便于AI在 partial_close 前评估剩余价值门槛
 			positionValue := math.Abs(pos.Quantity) * pos.MarkPrice
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
+			
+			// 格式化止损止盈信息
+			slInfo := "无"
+			if pos.StopLoss > 0 {
+				slInfo = fmt.Sprintf("%.4f", pos.StopLoss)
+			} else {
+				slInfo = "⚠️未设置(建议设置)"
+			}
+			tpInfo := "无"
+			if pos.TakeProfit > 0 {
+				tpInfo = fmt.Sprintf("%.4f", pos.TakeProfit)
+			}
+
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 数量%.4f | 仓位价值%.2f USDT | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n",
 				i+1, pos.Symbol, strings.ToUpper(pos.Side),
 				pos.EntryPrice, pos.MarkPrice, pos.Quantity, positionValue, pos.UnrealizedPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+			sb.WriteString(fmt.Sprintf("   🛡️ 保护设置: 止损(SL): %s | 止盈(TP): %s\n\n", slInfo, tpInfo))
 
 			// 使用FormatMarketData输出完整市场数据
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
@@ -714,6 +739,21 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 
 	// 开仓操作必须提供完整参数
 	if d.Action == "open_long" || d.Action == "open_short" {
+		// 默认 OrderType 为 market
+		if d.OrderType == "" {
+			d.OrderType = "market"
+		}
+		
+		// 验证限价单
+		if strings.ToLower(d.OrderType) == "limit" {
+			if d.LimitPrice <= 0 {
+				return fmt.Errorf("限价单必须提供有效的 LimitPrice: %.2f", d.LimitPrice)
+			}
+		} else if strings.ToLower(d.OrderType) != "market" {
+			// 暂不支持其他类型
+			return fmt.Errorf("不支持的订单类型: %s (仅支持 market, limit)", d.OrderType)
+		}
+
 		// 根据币种使用配置的杠杆上限
 		maxLeverage := altcoinLeverage         // 山寨币使用配置的杠杆
 		maxPositionValue := accountEquity * 10 // 山寨币最多10倍账户净值（名义价值）

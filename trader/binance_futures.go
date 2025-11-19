@@ -1007,7 +1007,194 @@ func (t *FuturesTrader) CheckMinNotional(symbol string, quantity float64) error 
 	return nil
 }
 
-// GetSymbolPrecision 获取交易对的数量精度
+// --- 新接口实现 ---
+
+// CreateOrder 创建订单（通用接口）
+func (t *FuturesTrader) CreateOrder(req *OrderRequest) (map[string]interface{}, error) {
+	if req.Symbol == "" {
+		return nil, fmt.Errorf("symbol is required")
+	}
+	if req.Quantity <= 0 {
+		return nil, fmt.Errorf("quantity must be positive")
+	}
+
+	// 1. 格式化数量
+	// 注意：FormatQuantity 应该已经存在于本文件中（之前被截断）。
+	// 如果不存在，这里会报错。但根据上下文，OpenLong 用到了它，所以它一定存在。
+	// 我们直接调用。
+	qtyStr, err := t.FormatQuantity(req.Symbol, req.Quantity)
+	if err != nil {
+		return nil, err
+	}
+	
+	// 2. 构建服务
+	svc := t.client.NewCreateOrderService().
+		Symbol(req.Symbol).
+		Quantity(qtyStr).
+		NewClientOrderID(getBrOrderID())
+
+	// 3. 映射 Side
+	if strings.ToUpper(req.Side) == "BUY" {
+		svc.Side(futures.SideTypeBuy)
+	} else {
+		svc.Side(futures.SideTypeSell)
+	}
+
+	// 4. 映射 PositionSide
+	if strings.ToUpper(req.PositionSide) == "LONG" {
+		svc.PositionSide(futures.PositionSideTypeLong)
+	} else if strings.ToUpper(req.PositionSide) == "SHORT" {
+		svc.PositionSide(futures.PositionSideTypeShort)
+	} else {
+		// 默认为 BOTH 或根据 Side 自动推断（不做全仓双向时）
+		// 但我们通常开启了双向持仓
+		svc.PositionSide(futures.PositionSideTypeBoth)
+	}
+
+	// 5. 映射 Type
+	switch strings.ToUpper(req.Type) {
+	case "MARKET":
+		svc.Type(futures.OrderTypeMarket)
+	case "LIMIT":
+		svc.Type(futures.OrderTypeLimit)
+		if req.Price <= 0 {
+			return nil, fmt.Errorf("limit price must be positive")
+		}
+		svc.Price(fmt.Sprintf("%.8f", req.Price)) // 同样需要格式化价格精度，这里暂且用 8 位
+		svc.TimeInForce(futures.TimeInForceTypeGTC) // 默认 GTC
+	case "STOP", "STOP_MARKET":
+		svc.Type(futures.OrderTypeStopMarket)
+		if req.StopPrice <= 0 {
+			return nil, fmt.Errorf("stop price must be positive")
+		}
+		svc.StopPrice(fmt.Sprintf("%.8f", req.StopPrice))
+	case "TAKE_PROFIT", "TAKE_PROFIT_MARKET":
+		svc.Type(futures.OrderTypeTakeProfitMarket)
+		if req.StopPrice <= 0 {
+			return nil, fmt.Errorf("stop price must be positive")
+		}
+		svc.StopPrice(fmt.Sprintf("%.8f", req.StopPrice))
+	default:
+		return nil, fmt.Errorf("unsupported order type: %s", req.Type)
+	}
+
+	// 6. 高级参数
+	if req.TimeInForce != "" {
+		switch strings.ToUpper(req.TimeInForce) {
+		case "GTC":
+			svc.TimeInForce(futures.TimeInForceTypeGTC)
+		case "IOC":
+			svc.TimeInForce(futures.TimeInForceTypeIOC)
+		case "FOK":
+			svc.TimeInForce(futures.TimeInForceTypeFOK)
+		}
+	}
+
+	if req.PostOnly && strings.ToUpper(req.Type) == "LIMIT" {
+		// GTX (Good Till Crossing) is Post Only in Binance
+		svc.TimeInForce(futures.TimeInForceTypeGTX) 
+	}
+
+	if req.ReduceOnly {
+		svc.ReduceOnly(true)
+	}
+
+	// 7. 执行
+	res, err := svc.Do(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	// 8. 返回结果
+	return map[string]interface{}{
+		"orderId":       res.OrderID,
+		"clientOrderId": res.ClientOrderID,
+		"status":        string(res.Status),
+		"symbol":        res.Symbol,
+		"avgPrice":      res.AvgPrice,
+		"executedQty":   res.ExecutedQuantity,
+	}, nil
+}
+
+// GetOrder 获取单个订单信息
+func (t *FuturesTrader) GetOrder(symbol string, orderID int64) (*OpenOrder, error) {
+	res, err := t.client.NewGetOrderService().
+		Symbol(symbol).
+		OrderID(orderID).
+		Do(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	price, _ := strconv.ParseFloat(res.Price, 64)
+	stopPrice, _ := strconv.ParseFloat(res.StopPrice, 64)
+	origQty, _ := strconv.ParseFloat(res.OrigQuantity, 64)
+	execQty, _ := strconv.ParseFloat(res.ExecutedQuantity, 64)
+
+	return &OpenOrder{
+		Symbol:        res.Symbol,
+		OrderID:       res.OrderID,
+		ClientOrderID: res.ClientOrderID,
+		Side:          string(res.Side),
+		PositionSide:  string(res.PositionSide),
+		Type:          string(res.Type),
+		Price:         price,
+		StopPrice:     stopPrice,
+		OrigQty:       origQty,
+		ExecutedQty:   execQty,
+		Status:        string(res.Status),
+		Time:          time.UnixMilli(res.Time),
+		UpdateTime:    time.UnixMilli(res.UpdateTime),
+	}, nil
+}
+
+// GetOpenOrders 获取当前挂单
+func (t *FuturesTrader) GetOpenOrders(symbol string) ([]*OpenOrder, error) {
+	svc := t.client.NewListOpenOrdersService()
+	if symbol != "" {
+		svc.Symbol(symbol)
+	}
+
+	res, err := svc.Do(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	var orders []*OpenOrder
+	for _, o := range res {
+		price, _ := strconv.ParseFloat(o.Price, 64)
+		stopPrice, _ := strconv.ParseFloat(o.StopPrice, 64)
+		origQty, _ := strconv.ParseFloat(o.OrigQuantity, 64)
+		execQty, _ := strconv.ParseFloat(o.ExecutedQuantity, 64)
+
+		orders = append(orders, &OpenOrder{
+			Symbol:        o.Symbol,
+			OrderID:       o.OrderID,
+			ClientOrderID: o.ClientOrderID,
+			Side:          string(o.Side),
+			PositionSide:  string(o.PositionSide),
+			Type:          string(o.Type),
+			Price:         price,
+			StopPrice:     stopPrice,
+			OrigQty:       origQty,
+			ExecutedQty:   execQty,
+			Status:        string(o.Status),
+			Time:          time.UnixMilli(o.Time),
+			UpdateTime:    time.UnixMilli(o.UpdateTime),
+		})
+	}
+	return orders, nil
+}
+
+// CancelOrder 取消指定订单
+func (t *FuturesTrader) CancelOrder(symbol string, orderID int64) error {
+	_, err := t.client.NewCancelOrderService().
+		Symbol(symbol).
+		OrderID(orderID).
+		Do(context.Background())
+	return err
+}
+
 func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
 	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
 	if err != nil {

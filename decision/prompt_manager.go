@@ -17,8 +17,10 @@ type PromptTemplate struct {
 
 // PromptManager 提示词管理器
 type PromptManager struct {
-	templates map[string]*PromptTemplate
-	mu        sync.RWMutex
+	templates         map[string]*PromptTemplate
+	baseTemplates     map[string]*PromptTemplate // 基础模板
+	strategyTemplates map[string]*PromptTemplate // 策略模板（片段）
+	mu                sync.RWMutex
 }
 
 var (
@@ -34,14 +36,19 @@ func init() {
 	if err := globalPromptManager.LoadTemplates(promptsDir); err != nil {
 		log.Printf("⚠️  加载提示词模板失败: %v", err)
 	} else {
-		log.Printf("✓ 已加载 %d 个系统提示词模板", len(globalPromptManager.templates))
+		log.Printf("✓ 已加载 %d 个系统提示词模板 (含 %d 个策略, %d 个基础)", 
+			len(globalPromptManager.templates), 
+			len(globalPromptManager.strategyTemplates),
+			len(globalPromptManager.baseTemplates))
 	}
 }
 
 // NewPromptManager 创建提示词管理器
 func NewPromptManager() *PromptManager {
 	return &PromptManager{
-		templates: make(map[string]*PromptTemplate),
+		templates:         make(map[string]*PromptTemplate),
+		baseTemplates:     make(map[string]*PromptTemplate),
+		strategyTemplates: make(map[string]*PromptTemplate),
 	}
 }
 
@@ -55,39 +62,81 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 		return fmt.Errorf("提示词目录不存在: %s", dir)
 	}
 
-	// 扫描目录中的所有 .txt 文件
-	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
-	if err != nil {
-		return fmt.Errorf("扫描提示词目录失败: %w", err)
+	// 1. 加载基础模板 (base/*.txt)
+	baseDir := filepath.Join(dir, "base")
+	if err := pm.loadSubDir(baseDir, pm.baseTemplates, "基础"); err != nil {
+		log.Printf("⚠️  加载基础模板失败: %v", err)
 	}
 
-	if len(files) == 0 {
-		log.Printf("⚠️  提示词目录 %s 中没有找到 .txt 文件", dir)
-		return nil
+	// 2. 加载策略模板 (strategies/*.txt)
+	stratDir := filepath.Join(dir, "strategies")
+	if err := pm.loadSubDir(stratDir, pm.strategyTemplates, "策略"); err != nil {
+		log.Printf("⚠️  加载策略模板失败: %v", err)
 	}
 
-	// 加载每个模板文件
+	// 3. 加载根目录模板 (兼容旧模式，作为完整模板)
+	// 扫描目录中的所有 .txt 文件 (不递归)
+	files, _ := filepath.Glob(filepath.Join(dir, "*.txt"))
 	for _, file := range files {
-		// 读取文件内容
 		content, err := os.ReadFile(file)
 		if err != nil {
-			log.Printf("⚠️  读取提示词文件失败 %s: %v", file, err)
 			continue
 		}
-
-		// 提取文件名（不含扩展名）作为模板名称
-		fileName := filepath.Base(file)
-		templateName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-
-		// 存储模板
-		pm.templates[templateName] = &PromptTemplate{
-			Name:    templateName,
-			Content: string(content),
-		}
-
-		log.Printf("  📄 加载提示词模板: %s (%s)", templateName, fileName)
+		name := strings.TrimSuffix(filepath.Base(file), ".txt")
+		pm.templates[name] = &PromptTemplate{Name: name, Content: string(content)}
+		log.Printf("  📄 加载根目录模板: %s", name)
 	}
 
+	// 4. 自动拼装策略模板 (Base + Strategy) -> Main Templates
+	// 默认使用 common_rules 作为基底
+	commonBase, hasCommon := pm.baseTemplates["common_rules"]
+	
+	for name, strat := range pm.strategyTemplates {
+		if hasCommon {
+			// 拼接：Strategy + Base (或 Base + Strategy，取决于偏好，通常 Base 放后面或前面)
+			// 之前的单体文件是 Strategy 在前，Base 在后？
+			// adaptive_moderate_hist_v6_3.txt 中 Base (基础交易约束) 在前面还是后面？
+			// 原文中 "基础交易约束" 在 Line 35，"决策流程" 在 Line 62。
+			// 所以是 Base -> Strategy。
+			// 但 common_rules.txt 是提取自 Line 35。 Line 1-34 是 Intro。
+			// 为了保持一致性，我们可以：Base + Strategy。
+			// 或者 Strategy Header + Base + Strategy Body。
+			// 简单起见：Base + \n\n + Strategy
+			
+			fullContent := commonBase.Content + "\n\n" + strat.Content
+			pm.templates[name] = &PromptTemplate{
+				Name:    name,
+				Content: fullContent,
+			}
+			log.Printf("  🧩 自动拼装策略: %s (Common + Strategy)", name)
+		} else {
+			// 如果没有 common_rules，直接使用策略片段（可能不完整，但作为回退）
+			pm.templates[name] = strat
+			log.Printf("  ⚠️ 未找到 common_rules，仅加载策略片段: %s", name)
+		}
+	}
+
+	return nil
+}
+
+// loadSubDir 加载子目录模板
+func (pm *PromptManager) loadSubDir(dir string, targetMap map[string]*PromptTemplate, typeName string) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil // 目录不存在忽略
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSuffix(filepath.Base(file), ".txt")
+		targetMap[name] = &PromptTemplate{Name: name, Content: string(content)}
+		log.Printf("  📄 加载%s模板: %s", typeName, name)
+	}
 	return nil
 }
 

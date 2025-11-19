@@ -824,3 +824,17 @@ func absFloat(x float64) float64 {
 	}
 	return x
 }
+
+// --- 新接口实现 (暂未适配) ---
+
+func (t *HyperliquidTrader) CreateOrder(req *OrderRequest) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("HyperliquidTrader: CreateOrder not implemented yet")
+}
+
+func (t *HyperliquidTrader) GetOpenOrders(symbol string) ([]*OpenOrder, error) {
+	return nil, fmt.Errorf("HyperliquidTrader: GetOpenOrders not implemented yet")
+}
+
+func (t *HyperliquidTrader) CancelOrder(symbol string, orderID int64) error {
+	return fmt.Errorf("HyperliquidTrader: CancelOrder not implemented yet")
+}

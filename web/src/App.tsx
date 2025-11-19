@@ -5,6 +5,8 @@ import AILearning from './components/AILearning'
 import { AITradersPage } from './components/AITradersPage'
 import { CompetitionPage } from './components/CompetitionPage'
 import { EquityChart } from './components/EquityChart'
+import { OpenOrderList } from './components/OpenOrderList'
+import { StrategyRoutingPanel } from './components/StrategyRoutingPanel'
 import HeaderBar from './components/landing/HeaderBar'
 import { LoginPage } from './components/LoginPage'
 import { RegisterPage } from './components/RegisterPage'
@@ -744,6 +746,16 @@ function TraderDetailsPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* 左侧：图表 + 持仓 */}
         <div className="space-y-6">
+          {/* Strategy Routing Information */}
+          {status?.strategy_routing && (
+            <div className="animate-slide-in" style={{ animationDelay: '0.05s' }}>
+              <StrategyRoutingPanel 
+                routing={status.strategy_routing} 
+                language={language} 
+              />
+            </div>
+          )}
+
           {/* Equity Chart */}
           <div className="animate-slide-in" style={{ animationDelay: '0.1s' }}>
             <EquityChart traderId={selectedTrader.trader_id} />
@@ -923,6 +935,14 @@ function TraderDetailsPage({
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Open Orders */}
+          <div className="animate-slide-in" style={{ animationDelay: '0.2s' }}>
+            <OpenOrderList 
+              traderId={selectedTrader.trader_id} 
+              language={language} 
+            />
           </div>
         </div>
         {/* 左侧结束 */}
