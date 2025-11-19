@@ -483,7 +483,7 @@ func (at *AutoTrader) runCycle() error {
 	
 	// 1. 路由分析
 	log.Printf("🛤️ 正在进行策略路由分析...")
-	routing := at.router.AnalyzeRegime(ctx)
+	routing := at.router.AnalyzeRegime(ctx, at.mcpClient)
 	strategyGroups := decision.GroupByStrategy(routing)
 	
 	var allDecisions []decision.Decision
@@ -690,6 +690,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		}
 		updateTime := at.positionFirstSeenTime[posKey]
 
+		// 获取当前止损止盈设置
+		var stopLoss, takeProfit float64
+		if sl, tp, err := at.trader.GetStopTakePrices(symbol, strings.ToUpper(side)); err == nil {
+			stopLoss = sl
+			takeProfit = tp
+		}
+
 		positionInfos = append(positionInfos, decision.PositionInfo{
 			Symbol:           symbol,
 			Side:             side,
@@ -702,6 +709,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			LiquidationPrice: liquidationPrice,
 			MarginUsed:       marginUsed,
 			UpdateTime:       updateTime,
+			StopLoss:         stopLoss,
+			TakeProfit:       takeProfit,
 		})
 	}
 
