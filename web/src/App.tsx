@@ -30,6 +30,17 @@ import type {
 
 type Page = 'competition' | 'traders' | 'trader' | 'anomaly-config'
 
+// 从 URL 查询参数中解析初始选中的交易员 ID（用于刷新后保持状态）
+const getInitialTraderIdFromUrl = (): string | undefined => {
+  try {
+    const searchParams = new URLSearchParams(window.location.search)
+    const traderId = searchParams.get('trader')
+    return traderId || undefined
+  } catch {
+    return undefined
+  }
+}
+
 // 平仓按钮组件
 function ClosePositionButton({ 
   position, 
@@ -141,7 +152,9 @@ function App() {
   }
 
   const [currentPage, setCurrentPage] = useState<Page>(getInitialPage())
-  const [selectedTraderId, setSelectedTraderId] = useState<string | undefined>()
+  const [selectedTraderId, setSelectedTraderId] = useState<string | undefined>(
+    getInitialTraderIdFromUrl(),
+  )
   const [lastUpdate, setLastUpdate] = useState<string>('--:--:--')
 
   // 监听URL变化，同步页面状态
@@ -149,6 +162,8 @@ function App() {
     const handleRouteChange = () => {
       const path = window.location.pathname
       const hash = window.location.hash.slice(1)
+      const searchParams = new URLSearchParams(window.location.search)
+      const traderIdFromQuery = searchParams.get('trader') || undefined
 
       if (path === '/anomaly-config') {
         setCurrentPage('anomaly-config')
@@ -160,6 +175,9 @@ function App() {
         hash === 'details'
       ) {
         setCurrentPage('trader')
+        if (traderIdFromQuery) {
+          setSelectedTraderId(traderIdFromQuery)
+        }
       } else if (
         path === '/competition' ||
         hash === 'competition' ||
@@ -270,6 +288,24 @@ function App() {
 
   const selectedTrader = traders?.find((t) => t.trader_id === selectedTraderId)
 
+  // 统一处理交易员选择与 URL 同步
+  const selectTraderAndNavigate = (traderId: string) => {
+    setSelectedTraderId(traderId)
+    const path = `/dashboard?trader=${traderId}`
+    window.history.pushState({}, '', path)
+    setRoute('/dashboard')
+    setCurrentPage('trader')
+  }
+
+  const navigateToTraderPage = () => {
+    const path = selectedTraderId
+      ? `/dashboard?trader=${selectedTraderId}`
+      : '/dashboard'
+    window.history.pushState({}, '', path)
+    setRoute('/dashboard')
+    setCurrentPage('trader')
+  }
+
   // Handle routing
   useEffect(() => {
     const handlePopState = () => {
@@ -347,9 +383,7 @@ function App() {
               setRoute('/traders')
               setCurrentPage('traders')
             } else if (page === 'trader') {
-              window.history.pushState({}, '', '/dashboard')
-              setRoute('/dashboard')
-              setCurrentPage('trader')
+              navigateToTraderPage()
             } else if (page === 'faq') {
               window.history.pushState({}, '', '/faq')
               setRoute('/faq')
@@ -458,8 +492,6 @@ function App() {
         onLogout={logout}
         isAdminMode={systemConfig?.admin_mode}
         onPageChange={(page) => {
-          console.log('Main app onPageChange called with:', page)
-
           if (page === 'competition') {
             window.history.pushState({}, '', '/competition')
             setRoute('/competition')
@@ -469,9 +501,7 @@ function App() {
             setRoute('/traders')
             setCurrentPage('traders')
           } else if (page === 'trader') {
-            window.history.pushState({}, '', '/dashboard')
-            setRoute('/dashboard')
-            setCurrentPage('trader')
+            navigateToTraderPage()
           } else if (page === 'faq') {
             window.history.pushState({}, '', '/faq')
             setRoute('/faq')
@@ -482,18 +512,13 @@ function App() {
           }
         }}
       />
-
-      {/* Main Content */}
       <main className="max-w-[1920px] mx-auto px-6 py-6 pt-24">
         {currentPage === 'competition' ? (
           <CompetitionPage />
         ) : currentPage === 'traders' ? (
           <AITradersPage
             onTraderSelect={(traderId) => {
-              setSelectedTraderId(traderId)
-              window.history.pushState({}, '', '/dashboard')
-              setRoute('/dashboard')
-              setCurrentPage('trader')
+              selectTraderAndNavigate(traderId)
             }}
           />
         ) : (
@@ -508,57 +533,10 @@ function App() {
             language={language}
             traders={traders}
             selectedTraderId={selectedTraderId}
-            onTraderSelect={setSelectedTraderId}
+            onTraderSelect={selectTraderAndNavigate}
           />
         )}
       </main>
-
-      {/* Footer */}
-      <footer
-        className="mt-16"
-        style={{ borderTop: '1px solid #2B3139', background: '#181A20' }}
-      >
-        <div
-          className="max-w-[1920px] mx-auto px-6 py-6 text-center text-sm"
-          style={{ color: '#5E6673' }}
-        >
-          <p>{t('footerTitle', language)}</p>
-          <p className="mt-1">{t('footerWarning', language)}</p>
-          <div className="mt-4">
-            <a
-              href="https://github.com/tinkle-community/nofx"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
-              style={{
-                background: '#1E2329',
-                color: '#848E9C',
-                border: '1px solid #2B3139',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#2B3139'
-                e.currentTarget.style.color = '#EAECEF'
-                e.currentTarget.style.borderColor = '#F0B90B'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#1E2329'
-                e.currentTarget.style.color = '#848E9C'
-                e.currentTarget.style.borderColor = '#2B3139'
-              }}
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 16 16"
-                fill="currentColor"
-              >
-                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-              </svg>
-              GitHub
-            </a>
-          </div>
-        </div>
-      </footer>
     </div>
   )
 }

@@ -480,85 +480,133 @@ func (at *AutoTrader) runCycle() error {
 		ctx.Account.TotalEquity, ctx.Account.AvailableBalance, ctx.Account.PositionCount)
 
 	// --- 策略路由与分组并行执行 (v2) ---
-	
-	// 1. 路由分析
-	log.Printf("🛤️ 正在进行策略路由分析...")
-	routing := at.router.AnalyzeRegime(ctx, at.mcpClient)
-	strategyGroups := decision.GroupByStrategy(routing)
-	
+
 	var allDecisions []decision.Decision
-	var groupWg sync.WaitGroup
-	var decisionMutex sync.Mutex
-	var firstErr error
-	var errMutex sync.Mutex
 
-	// 记录路由结果到日志
-	for strategy, symbols := range strategyGroups {
-		log.Printf("  🔹 策略组 [%s]: %s", strategy, strings.Join(symbols, ", "))
-	}
+	// 如果未配置路由器，或路由器不可用，则直接使用 system_prompt_template 进行单一策略决策
+	if at.router == nil {
+		log.Printf("⚠️ 未配置策略路由器，使用 system_prompt_template=%s 单一策略模式", at.systemPromptTemplate)
+		fullDecision, err := decision.GetFullDecisionWithCustomPrompt(ctx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, at.systemPromptTemplate)
+		if err != nil {
+			record.Success = false
+			record.ErrorMessage = fmt.Sprintf("AI决策失败（单一策略模式）: %v", err)
+			at.decisionLogger.LogDecision(record)
+			return fmt.Errorf("AI决策失败: %w", err)
+		}
+		// 记录思维链、系统提示词与输入提示词
+		record.CoTTrace = fullDecision.CoTTrace
+		record.SystemPrompt = fullDecision.SystemPrompt
+		record.InputPrompt = fullDecision.UserPrompt
+		// 将 StrategyCode 标记为当前模板名称，便于日志分析
+		for i := range fullDecision.Decisions {
+			fullDecision.Decisions[i].StrategyCode = at.systemPromptTemplate
+		}
+		allDecisions = fullDecision.Decisions
+	} else {
+		// 1. 路由分析
+		log.Printf("🛤️ 正在进行策略路由分析...")
+		routing, routerTrace := at.router.AnalyzeRegime(ctx, at.mcpClient)
+		record.StrategyRouting = routing
+		if routerTrace != nil {
+			record.RouterSystemPrompt = routerTrace.SystemPrompt
+			record.RouterInputPrompt = routerTrace.UserPrompt
+			record.RouterRawOutput = routerTrace.RawOutput
+		}
+		strategyGroups := decision.GroupByStrategy(routing)
 
-	// 2. 并行执行策略组
-	for strategy, symbols := range strategyGroups {
-		groupWg.Add(1)
-		go func(strat string, syms []string) {
-			defer groupWg.Done()
-
-			// 为该组构建子上下文 (深拷贝基础信息，只保留相关币种)
-			subCtx := *ctx // 浅拷贝
-			// 过滤 Positions 和 CandidateCoins
-			subCtx.Positions = filterPositionsBySymbols(ctx.Positions, syms)
-			subCtx.CandidateCoins = filterCandidatesBySymbols(ctx.CandidateCoins, syms)
-			
-			// 如果该组没有币种（理论上不会发生），跳过
-			if len(subCtx.Positions) == 0 && len(subCtx.CandidateCoins) == 0 {
-				return
-			}
-
-			// 调用 AI (使用特定的策略模板)
-			// 注意：GetFullDecisionWithCustomPrompt 内部会从 PromptManager 获取 strat 对应的模板
-			// 如果 strat 是 "adaptive_moderate_v6_3" 这种标准名，它会自动拼装 Base + Strategy
-			log.Printf("🤖 请求AI决策 [策略: %s] (币种: %d个)...", strat, len(syms))
-			
-			groupDecision, err := decision.GetFullDecisionWithCustomPrompt(&subCtx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, strat)
-			
+		// 如果路由结果为空，同样回退到单一策略模式
+		if len(strategyGroups) == 0 {
+			log.Printf("⚠️ Router 未返回任何路由结果，使用 system_prompt_template=%s 单一策略模式", at.systemPromptTemplate)
+			fullDecision, err := decision.GetFullDecisionWithCustomPrompt(ctx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, at.systemPromptTemplate)
 			if err != nil {
-				log.Printf("❌ 策略组 [%s] 执行失败: %v", strat, err)
-				errMutex.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				errMutex.Unlock()
-				return
+				record.Success = false
+				record.ErrorMessage = fmt.Sprintf("AI决策失败（单一策略模式）: %v", err)
+				at.decisionLogger.LogDecision(record)
+				return fmt.Errorf("AI决策失败: %w", err)
+			}
+			// 记录思维链、系统提示词与输入提示词
+			record.CoTTrace = fullDecision.CoTTrace
+			record.SystemPrompt = fullDecision.SystemPrompt
+			record.InputPrompt = fullDecision.UserPrompt
+			for i := range fullDecision.Decisions {
+				fullDecision.Decisions[i].StrategyCode = at.systemPromptTemplate
+			}
+			allDecisions = fullDecision.Decisions
+		} else {
+			var groupWg sync.WaitGroup
+			var decisionMutex sync.Mutex
+			var firstErr error
+			var errMutex sync.Mutex
+
+			// 记录路由结果到日志
+			for strategy, symbols := range strategyGroups {
+				log.Printf("  🔹 策略组 [%s]: %s", strategy, strings.Join(symbols, ", "))
 			}
 
-			// 聚合决策
-			decisionMutex.Lock()
-			// 将 StrategyCode 注入到每个决策中
-			for i := range groupDecision.Decisions {
-				groupDecision.Decisions[i].StrategyCode = strat
+			// 2. 并行执行策略组
+			for strategy, symbols := range strategyGroups {
+				groupWg.Add(1)
+				go func(strat string, syms []string) {
+					defer groupWg.Done()
+
+					// 为该组构建子上下文 (深拷贝基础信息，只保留相关币种)
+					subCtx := *ctx // 浅拷贝
+					// 过滤 Positions 和 CandidateCoins
+					subCtx.Positions = filterPositionsBySymbols(ctx.Positions, syms)
+					subCtx.CandidateCoins = filterCandidatesBySymbols(ctx.CandidateCoins, syms)
+					
+					// 如果该组没有币种（理论上不会发生），跳过
+					if len(subCtx.Positions) == 0 && len(subCtx.CandidateCoins) == 0 {
+						return
+					}
+
+					// 调用 AI (使用特定的策略模板)
+					// 注意：GetFullDecisionWithCustomPrompt 内部会从 PromptManager 获取 strat 对应的模板
+					// 如果 strat 是 "adaptive_moderate_v6_3" 这种标准名，它会自动拼装 Base + Strategy
+					log.Printf("🤖 请求AI决策 [策略: %s] (币种: %d个)...", strat, len(syms))
+					
+					groupDecision, err := decision.GetFullDecisionWithCustomPrompt(&subCtx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, strat)
+					
+					if err != nil {
+						log.Printf("❌ 策略组 [%s] 执行失败: %v", strat, err)
+						errMutex.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						errMutex.Unlock()
+						return
+					}
+				
+					// 聚合决策
+					decisionMutex.Lock()
+					// 将 StrategyCode 注入到每个决策中
+					for i := range groupDecision.Decisions {
+						groupDecision.Decisions[i].StrategyCode = strat
+					}
+					allDecisions = append(allDecisions, groupDecision.Decisions...)
+					
+					// 记录该组的思维链与输入提示词（按策略分段追加，便于前端查看）
+					record.CoTTrace += fmt.Sprintf("\n\n=== 策略组: %s ===\n%s", strat, groupDecision.CoTTrace)
+					record.InputPrompt += fmt.Sprintf("\n\n=== 策略组: %s ===\n%s", strat, groupDecision.UserPrompt)
+					// 记录首个 system prompt 作为代表（通常各组共享同一基础模板）
+					if record.SystemPrompt == "" {
+						record.SystemPrompt = groupDecision.SystemPrompt
+					}
+					decisionMutex.Unlock()
+
+				}(strategy, symbols)
 			}
-			allDecisions = append(allDecisions, groupDecision.Decisions...)
+
+			// 等待所有组完成
+			groupWg.Wait()
 			
-			// 记录该组的思维链（可选，防止日志过大，只记录第一组或关键组？）
-			// 这里简单处理：追加到 record.CoTTrace
-			record.CoTTrace += fmt.Sprintf("\n\n=== 策略组: %s ===\n%s", strat, groupDecision.CoTTrace)
-			// 也可以记录 system prompt
-			if record.SystemPrompt == "" {
-				record.SystemPrompt = groupDecision.SystemPrompt // 记录第一个
+			if firstErr != nil && len(allDecisions) == 0 {
+				record.Success = false
+				record.ErrorMessage = fmt.Sprintf("所有策略组执行失败，首个错误: %v", firstErr)
+				at.decisionLogger.LogDecision(record)
+				return fmt.Errorf("AI决策失败: %w", firstErr)
 			}
-			decisionMutex.Unlock()
-
-		}(strategy, symbols)
-	}
-
-	// 等待所有组完成
-	groupWg.Wait()
-
-	if firstErr != nil && len(allDecisions) == 0 {
-		record.Success = false
-		record.ErrorMessage = fmt.Sprintf("所有策略组执行失败，首个错误: %v", firstErr)
-		at.decisionLogger.LogDecision(record)
-		return fmt.Errorf("AI决策失败: %w", firstErr)
+		}
 	}
 
 	// 即使部分失败，只要有决策就继续执行
@@ -581,6 +629,11 @@ func (at *AutoTrader) runCycle() error {
 
 	// 执行决策并记录结果
 	for _, d := range sortedDecisions {
+		orderTypeLabel := "市价单"
+		if strings.ToLower(d.OrderType) == "limit" {
+			orderTypeLabel = "限价单"
+		}
+
 		actionRecord := logger.DecisionAction{
 			Action:       d.Action,
 			Symbol:       d.Symbol,
@@ -595,10 +648,10 @@ func (at *AutoTrader) runCycle() error {
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			log.Printf("❌ 执行决策失败 (%s %s): %v", d.Symbol, d.Action, err)
 			actionRecord.Error = err.Error()
-			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s 失败: %v", d.Symbol, d.Action, err))
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ [%s] %s %s 失败: %v", orderTypeLabel, d.Symbol, d.Action, err))
 		} else {
 			actionRecord.Success = true
-			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s 成功", d.Symbol, d.Action))
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ [%s] %s %s 成功", orderTypeLabel, d.Symbol, d.Action))
 			// 成功执行后短暂延迟
 			time.Sleep(1 * time.Second)
 		}
@@ -1856,6 +1909,14 @@ func (at *AutoTrader) GetUserTrades(symbol string, start, end time.Time, limit i
 	return nil, fmt.Errorf("underlying trader does not support user trades")
 }
 
+// CancelOrder 通过底层交易器取消指定订单
+func (at *AutoTrader) CancelOrder(symbol string, orderID int64) error {
+	if at.trader == nil {
+		return fmt.Errorf("underlying trader is nil")
+	}
+	return at.trader.CancelOrder(symbol, orderID)
+}
+
 // LogAnomalyAction 记录异常监控触发的紧急操作到决策日志（用于前端“最近决策”展示）
 func (at *AutoTrader) LogAnomalyAction(symbol, action string, price float64, extra map[string]interface{}) {
 	if at.decisionLogger == nil {
@@ -1942,16 +2003,16 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 
 // GetOpenOrders 获取当前所有挂单
 // 注意：如果未指定symbol，部分交易所可能不支持一次性获取所有挂单，这里简化处理
-func (at *AutoTrader) GetOpenOrders(symbol string) ([]map[string]interface{}, error) {
+func (at *AutoTrader) GetOpenOrders(symbol string) ([]*OpenOrder, error) {
 	if symbol == "" {
 		// 如果为空，理论上应该遍历 at.tradingCoins
 		// 为了避免请求过多，我们暂时只支持单个查询，或者如果底层支持 GetAllOpenOrders 则更好
-		// 目前 interface 只有 GetOpenOrders(symbol)
+		// 目前接口只有 GetOpenOrders(symbol)
 		// 如果一定要全部，前端最好分开请求，或者在这里做聚合（但会很慢）
-		
+
 		// 策略优化：仅查询 TradingCoins
-		var allOrders []map[string]interface{}
-		// 并发限制？
+		var allOrders []*OpenOrder
+		// 并发限制？目前按顺序查询，避免实现复杂的并发限流
 		for _, sym := range at.tradingCoins {
 			orders, err := at.trader.GetOpenOrders(sym)
 			if err == nil && len(orders) > 0 {

@@ -152,6 +152,9 @@ func (s *Server) setupRoutes() {
 			protected.GET("/account", s.handleAccount)
 			protected.GET("/positions", s.handlePositions)
 			protected.POST("/positions/close", s.handleClosePosition) // 手动平仓
+			// 挂单查询与取消
+			protected.GET("/orders/open", s.handleOpenOrders)
+			protected.POST("/orders/cancel", s.handleCancelOrder)
 			protected.GET("/decisions", s.handleDecisions)
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
@@ -1319,6 +1322,56 @@ func (s *Server) handlePositions(c *gin.Context) {
 	c.JSON(http.StatusOK, positions)
 }
 
+// handleOpenOrders 查询当前挂单
+// GET /api/orders/open?trader_id=xxx[&symbol=ETHUSDT]
+func (s *Server) handleOpenOrders(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	symbol := c.Query("symbol")
+	orders, err := trader.GetOpenOrders(symbol)
+	if err != nil {
+		log.Printf("❌ 获取挂单列表失败 [%s]: %v", trader.GetName(), err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("获取挂单列表失败: %v", err),
+		})
+		return
+	}
+
+	// 转成前端期望的字段命名（camelCase），避免直接暴露内部结构实现细节
+	resp := make([]map[string]interface{}, 0, len(orders))
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+		resp = append(resp, map[string]interface{}{
+			"symbol":        o.Symbol,
+			"orderId":       o.OrderID,
+			"clientOrderId": o.ClientOrderID,
+			"side":          o.Side,
+			"positionSide":  o.PositionSide,
+			"type":          o.Type,
+			"price":         o.Price,
+			"origQty":       o.OrigQty,
+			"executedQty":   o.ExecutedQty,
+			"status":        o.Status,
+			"time":          o.Time.UnixMilli(),
+			"updateTime":    o.UpdateTime.UnixMilli(),
+		})
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // handleClosePosition 手动平仓
 func (s *Server) handleClosePosition(c *gin.Context) {
 	userID := c.GetString("user_id")
@@ -1373,6 +1426,53 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "平仓成功",
 		"result":  result,
+	})
+}
+
+// handleCancelOrder 取消挂单
+// POST /api/orders/cancel
+func (s *Server) handleCancelOrder(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	var req struct {
+		TraderID string `json:"trader_id" binding:"required"`
+		Symbol   string `json:"symbol" binding:"required"`
+		OrderID  int64  `json:"order_id" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+		return
+	}
+
+	// 校验交易员是否属于当前用户
+	_, _, _, err := s.database.GetTraderConfig(userID, req.TraderID)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "交易员不存在或无访问权限"})
+		return
+	}
+
+	// 获取交易员实例
+	trader, err := s.traderManager.GetTrader(req.TraderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "交易员不存在"})
+		return
+	}
+
+	log.Printf("📋 收到取消挂单请求 [用户=%s, 交易员=%s, 币种=%s, 订单ID=%d]", userID, req.TraderID, req.Symbol, req.OrderID)
+
+	if err := trader.CancelOrder(req.Symbol, req.OrderID); err != nil {
+		log.Printf("❌ 取消挂单失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("取消挂单失败: %v", err),
+		})
+		return
+	}
+
+	log.Printf("✓ 取消挂单成功 [%s, order_id=%d]", req.Symbol, req.OrderID)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "取消挂单成功",
+		"result":  "ok",
 	})
 }
 

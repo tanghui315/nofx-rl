@@ -1,12 +1,10 @@
 package decision
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
-	"math"
-	"nofx/market"
 	"nofx/mcp"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +16,13 @@ type StrategyRoute struct {
 	StrategyCode string    `json:"strategy_code"` // 策略代码 (e.g. "trend_carry", "adaptive_moderate_v6_3")
 	Reason       string    `json:"reason"`        // 路由理由
 	UpdateTime   time.Time `json:"update_time"`   // 更新时间
+}
+
+// RouterTrace 用于记录本次 Router Agent 调用所使用的提示词与原始输出，便于写入决策日志
+type RouterTrace struct {
+	SystemPrompt string
+	UserPrompt   string
+	RawOutput    string
 }
 
 // Router 策略路由器
@@ -75,7 +80,16 @@ func (r *Router) UpdateRoute(symbol, strategy, reason string) {
 }
 
 // AnalyzeRegime 分析市场状态并更新路由 (接入 LLM Router Agent)
-func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) map[string]string {
+// 返回值：
+//   - map[string]string: symbol -> strategy_code 的路由结果
+//   - *RouterTrace: 本次 Router 调用所使用的 system/user prompt 与原始 LLM 输出（用于日志记录）
+func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) (map[string]string, *RouterTrace) {
+	// 0. 为 Router 加载市场数据，与主交易决策使用同一数据管线
+	//    这样 Router 和主策略 Agent 看到的是同一份技术面/情绪/流动性信息
+	if err := fetchMarketDataForContext(ctx); err != nil {
+		log.Printf("⚠️ Router 获取市场数据失败: %v", err)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -117,7 +131,7 @@ func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) map[string]s
 
 	// 如果没有需要更新的，直接返回
 	if len(symbolsToUpdate) == 0 {
-		return result
+		return result, nil
 	}
 
 	// 2. 构建 Router Prompt 并调用 LLM
@@ -127,6 +141,13 @@ func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) map[string]s
 
 	routerSystemPrompt := buildRouterSystemPrompt(r.DefaultStrategy)
 	routerUserPrompt := buildRouterUserPrompt(ctx, symbolsToUpdate)
+
+	// 预先构造 RouterTrace，便于即使调用失败也能记录提示词
+	trace := &RouterTrace{
+		SystemPrompt: routerSystemPrompt,
+		UserPrompt:   routerUserPrompt,
+		RawOutput:    "",
+	}
 
 	aiResponse, err := mcpClient.CallWithMessages(routerSystemPrompt, routerUserPrompt)
 	if err != nil {
@@ -140,8 +161,11 @@ func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) map[string]s
 			}
 			result[sym] = r.DefaultStrategy
 		}
-		return result
+		return result, trace
 	}
+
+	// 记录原始 LLM 输出，便于日志分析
+	trace.RawOutput = aiResponse
 
 	// 3. 解析 LLM 响应并更新路由
 	routes, err := parseRouterResponse(aiResponse)
@@ -157,7 +181,7 @@ func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) map[string]s
 			}
 			result[sym] = r.DefaultStrategy
 		}
-		return result
+		return result, trace
 	}
 
 	// 4. 应用新路由
@@ -188,7 +212,7 @@ func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) map[string]s
 		}
 	}
 
-	return result
+	return result, trace
 }
 
 // buildRouterSystemPrompt 构建 Router 系统提示词
@@ -206,7 +230,13 @@ func buildRouterSystemPrompt(defaultStrategy string) string {
 3. **pullback_ema** (均线回抽):
    - 适用: 趋势中的回调阶段，价格回踩 EMA20/50，量能萎缩。
    - 行为: 均线处挂单接回，盈亏比高。
-4. **%s** (默认策略/通用):
+4. **breakout_volexp** (放量突破):
+   - 适用: 布林带长期收口后，突然伴随成交量剧增突破关键位。
+   - 行为: 右侧追突破（Stop-Market 或 Market），目标是捕捉爆发性行情。
+5. **no_trade** (观望):
+   - 适用: 趋势末期、重大风险事件前夕、流动性枯竭或指标互相冲突。
+   - 行为: 强制空仓观望，不进行任何交易。
+6. **%s** (默认策略/通用):
    - 适用: 状态不明朗，或不符合上述特征，或混合状态。
    - 行为: 平衡型策略，兼顾趋势和反转。
 
@@ -220,36 +250,109 @@ func buildRouterSystemPrompt(defaultStrategy string) string {
 }
 
 // buildRouterUserPrompt 构建 Router 用户提示词
+// 这里复用与主决策 Agent 相同的数据管线，但采用更精简的多因子特征表，专注于“选策略”所需的信息
 func buildRouterUserPrompt(ctx *Context, symbols []string) string {
 	var sb strings.Builder
+
 	sb.WriteString(fmt.Sprintf("Current Time: %s\n", ctx.CurrentTime))
-	sb.WriteString("Analyze the following markets and assign a strategy:\n\n")
+	sb.WriteString("You are the strategy router. For each symbol, analyze the market regime and choose the most appropriate strategy.\n\n")
+
+	// 新闻速览（全局情绪与事件背景，控制条数避免过长）
+	if len(ctx.News) > 0 {
+		sb.WriteString("## Recent News (top 6)\n")
+		shown := 0
+		for _, n := range ctx.News {
+			if shown >= 6 {
+				break
+			}
+			line := n.Title
+			if n.Source != "" {
+				line += " — " + n.Source
+			}
+			if n.PublishedAt != "" {
+				line += " (" + n.PublishedAt + ")"
+			}
+			if n.Symbol != "" {
+				line = "[" + n.Symbol + "] " + line
+			}
+			sb.WriteString("- " + line + "\n")
+			shown++
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("## Symbols\n\n")
 
 	for _, sym := range symbols {
-		if data, ok := ctx.MarketDataMap[sym]; ok {
-			// 提取关键指标
-			trend := "Neutral"
-			if data.PriceChange24h > 3 { trend = "Up" }
-			if data.PriceChange24h < -3 { trend = "Down" }
-			
-			vol := "Normal"
-			if data.IntradaySeries != nil {
-				atrPct := (data.IntradaySeries.ATR14 / data.CurrentPrice) * 100
-				if atrPct < 1.0 { vol = "Low" }
-				if atrPct > 3.0 { vol = "High" }
-			}
-
-			adx := "N/A"
-			if data.IntradaySeries != nil {
-				adx = fmt.Sprintf("%.1f", data.IntradaySeries.ADX14)
-			}
-			
-			bbWidth := "N/A" // 暂时无法直接获取，略过
-			
-			sb.WriteString(fmt.Sprintf("- %s: Price=%.4f, 24hChg=%.2f%%, Trend=%s, Vol=%s, ADX=%s\n", 
-				sym, data.CurrentPrice, data.PriceChange24h, trend, vol, adx))
+		data, ok := ctx.MarketDataMap[sym]
+		if !ok || data == nil {
+			continue
 		}
+
+		// 基本价格与涨跌幅
+		sb.WriteString(fmt.Sprintf("### %s\n", sym))
+		sb.WriteString(fmt.Sprintf("- Price: %.4f | 1h: %+.2f%% | 4h: %+.2f%%\n",
+			data.CurrentPrice, data.PriceChange1h, data.PriceChange4h))
+
+		// 波动率与成交量特征（区分趋势/震荡/爆发）
+		bbWidth := 0.0
+		if data.BollingerBands != nil {
+			bbWidth = data.BollingerBands.BandWidth
+		}
+		atrPct := 0.0
+		if data.IntradaySeries != nil && data.CurrentPrice > 0 {
+			atrPct = (data.IntradaySeries.ATR14 / data.CurrentPrice) * 100
+		}
+		volRatio := 0.0
+		if data.LongerTermContext != nil && data.LongerTermContext.AverageVolume > 0 {
+			volRatio = data.LongerTermContext.CurrentVolume / data.LongerTermContext.AverageVolume
+		}
+		sb.WriteString(fmt.Sprintf("- Volatility: BBWidth %.2f%% | ATR(3m,14) %.2f%% | Volume %.1fx avg\n",
+			bbWidth, atrPct, volRatio))
+
+		// 趋势强度 + OI / Funding / OI Top（流动性与杠杆情绪）
+		adx := 0.0
+		if data.ADX != nil {
+			adx = data.ADX.ADX
+		}
+		oiLatest := 0.0
+		if data.OpenInterest != nil {
+			oiLatest = data.OpenInterest.Latest
+		}
+		// OI Top 变化率（如有），用于识别主力增减仓
+		oiTopDelta := 0.0
+		if ctx.OITopDataMap != nil {
+			if oiTop, ok := ctx.OITopDataMap[sym]; ok && oiTop != nil {
+				oiTopDelta = oiTop.OIDeltaPercent
+			}
+		}
+		sb.WriteString(fmt.Sprintf("- Trend/OI: ADX %.1f | OI %.2f | OI_top Δ%.2f%% | Funding %.4f\n",
+			adx, oiLatest, oiTopDelta, data.FundingRate))
+
+		// 语义化技术分析摘要（简化版）
+		if data.Semantics != nil {
+			signals := ""
+			if len(data.Semantics.KeySignals) > 0 {
+				signals = strings.Join(data.Semantics.KeySignals, ", ")
+				if len(signals) > 120 {
+					signals = signals[:120] + "…"
+				}
+			}
+			sb.WriteString(fmt.Sprintf("- Semantic: trend %s/%s, momentum %s, vol %s\n",
+				data.Semantics.TrendDirection,
+				data.Semantics.TrendStrength,
+				data.Semantics.MomentumStatus,
+				data.Semantics.VolatilityLevel,
+			))
+			if signals != "" {
+				sb.WriteString(fmt.Sprintf("  Key signals: %s\n", signals))
+			}
+		}
+
+		sb.WriteString("\n")
 	}
+
+	sb.WriteString("Return a pure JSON array of {symbol, strategy_code, reason}.\n")
 	return sb.String()
 }
 
@@ -294,10 +397,12 @@ func extractDecisionsInternal[T any](response string) ([]T, error) {
 // validateStrategyCode 验证策略代码
 func validateStrategyCode(code, defaultStrat string) string {
 	valid := map[string]bool{
-		"trend_carry":          true,
-		"range_grid":           true,
-		"pullback_ema":         true,
-		defaultStrat:           true,
+		"trend_carry":            true,
+		"range_grid":             true,
+		"pullback_ema":           true,
+		"breakout_volexp":        true,
+		"no_trade":               true,
+		defaultStrat:             true,
 		"adaptive_moderate_v6_3": true,
 	}
 	if valid[code] {

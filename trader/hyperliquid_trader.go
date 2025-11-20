@@ -828,13 +828,124 @@ func absFloat(x float64) float64 {
 // --- 新接口实现 (暂未适配) ---
 
 func (t *HyperliquidTrader) CreateOrder(req *OrderRequest) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("HyperliquidTrader: CreateOrder not implemented yet")
+	if req == nil {
+		return nil, fmt.Errorf("HyperliquidTrader.CreateOrder: request is nil")
+	}
+	if req.Symbol == "" {
+		return nil, fmt.Errorf("HyperliquidTrader.CreateOrder: symbol is required")
+	}
+	if req.Quantity <= 0 {
+		return nil, fmt.Errorf("HyperliquidTrader.CreateOrder: quantity must be positive")
+	}
+	// 目前仅支持 LIMIT 单，市价单仍走 OpenLong/OpenShort 封装逻辑
+	if strings.ToUpper(req.Type) != "LIMIT" {
+		return nil, fmt.Errorf("HyperliquidTrader.CreateOrder: only LIMIT is supported for now, got %s", req.Type)
+	}
+	if req.Price <= 0 {
+		return nil, fmt.Errorf("HyperliquidTrader.CreateOrder: limit price must be positive")
+	}
+
+	coin := convertSymbolToHyperliquid(req.Symbol)
+
+	// 数量与价格精度处理
+	size := t.roundToSzDecimals(coin, req.Quantity)
+	price := t.roundPriceToSigfigs(req.Price)
+
+	// 映射 TimeInForce / PostOnly 到 Hyperliquid 的 TIF
+	tif := hyperliquid.TifGtc
+	if req.PostOnly {
+		// ALO = Add Liquidity Only，相当于 Post Only
+		tif = hyperliquid.TifAlo
+	} else if strings.ToUpper(req.TimeInForce) == "IOC" {
+		tif = hyperliquid.TifIoc
+	}
+
+	isBuy := strings.ToUpper(req.Side) == "BUY"
+
+	order := hyperliquid.CreateOrderRequest{
+		Coin:  coin,
+		IsBuy: isBuy,
+		Size:  size,
+		Price: price,
+		OrderType: hyperliquid.OrderType{
+			Limit: &hyperliquid.LimitOrderType{
+				Tif: tif,
+			},
+		},
+		ReduceOnly: req.ReduceOnly,
+	}
+
+	if _, err := t.exchange.Order(t.ctx, order, nil); err != nil {
+		return nil, fmt.Errorf("Hyperliquid limit order failed: %w", err)
+	}
+
+	// Hyperliquid 当前接口未返回标准 orderId，这里与 OpenLong/OpenShort 保持一致，返回占位值
+	return map[string]interface{}{
+		"orderId": int64(0),
+		"symbol":  req.Symbol,
+		"status":  "NEW",
+	}, nil
 }
 
 func (t *HyperliquidTrader) GetOpenOrders(symbol string) ([]*OpenOrder, error) {
-	return nil, fmt.Errorf("HyperliquidTrader: GetOpenOrders not implemented yet")
+	coinFilter := ""
+	if symbol != "" {
+		coinFilter = convertSymbolToHyperliquid(symbol)
+	}
+
+	// 获取所有挂单
+	openOrders, err := t.exchange.Info().OpenOrders(t.ctx, t.walletAddr)
+	if err != nil {
+		return nil, fmt.Errorf("获取挂单失败: %w", err)
+	}
+
+	var results []*OpenOrder
+	for _, o := range openOrders {
+		if coinFilter != "" && o.Coin != coinFilter {
+			continue
+		}
+
+		// Hyperliquid OpenOrders 返回的大致字段：
+		// coin, limitPx, oid, side ("A"/"B"), sz, timestamp
+		price, _ := strconv.ParseFloat(o.LimitPx, 64)
+		size, _ := strconv.ParseFloat(o.Sz, 64)
+
+		// 标准 symbol：如 BTC -> BTCUSDT
+		sym := o.Coin + "USDT"
+
+		// 方向: "A" = 买单(Bid)，"B" = 卖单(Ask)
+		side := "BUY"
+		if o.Side == "B" {
+			side = "SELL"
+		}
+
+		results = append(results, &OpenOrder{
+			Symbol:        sym,
+			OrderID:       int64(o.Oid),
+			ClientOrderID: "", // Hyperliquid 当前未暴露 client order id
+			Side:          side,
+			PositionSide:  "", // HL 不区分多空持仓方向字段，这里留空
+			Type:          "LIMIT",
+			Price:         price,
+			StopPrice:     0,
+			OrigQty:       size,
+			ExecutedQty:   0, // OpenOrders 只包含未成交部分
+			Status:        "NEW",
+			Time:          time.UnixMilli(int64(o.Timestamp)),
+			UpdateTime:    time.UnixMilli(int64(o.Timestamp)),
+		})
+	}
+
+	return results, nil
 }
 
 func (t *HyperliquidTrader) CancelOrder(symbol string, orderID int64) error {
-	return fmt.Errorf("HyperliquidTrader: CancelOrder not implemented yet")
+	if symbol == "" {
+		return fmt.Errorf("HyperliquidTrader.CancelOrder: symbol is required")
+	}
+	coin := convertSymbolToHyperliquid(symbol)
+	if _, err := t.exchange.Cancel(t.ctx, coin, int(orderID)); err != nil {
+		return fmt.Errorf("取消订单失败: %w", err)
+	}
+	return nil
 }
