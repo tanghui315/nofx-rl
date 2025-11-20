@@ -8,6 +8,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/sonirico/go-hyperliquid"
@@ -906,9 +907,10 @@ func (t *HyperliquidTrader) GetOpenOrders(symbol string) ([]*OpenOrder, error) {
 		}
 
 		// Hyperliquid OpenOrders 返回的大致字段：
-		// coin, limitPx, oid, side ("A"/"B"), sz, timestamp
-		price, _ := strconv.ParseFloat(o.LimitPx, 64)
-		size, _ := strconv.ParseFloat(o.Sz, 64)
+		// coin, limitPx, oid, side ("A"/"B"), timestamp
+		// 当前 SDK 中 LimitPx 已为 float64 类型，无需再 ParseFloat
+		price := o.LimitPx
+		size := 0.0 // SDK OpenOrder 暂未在此版本暴露数量字段，这里先置 0
 
 		// 标准 symbol：如 BTC -> BTCUSDT
 		sym := o.Coin + "USDT"
@@ -944,7 +946,13 @@ func (t *HyperliquidTrader) CancelOrder(symbol string, orderID int64) error {
 		return fmt.Errorf("HyperliquidTrader.CancelOrder: symbol is required")
 	}
 	coin := convertSymbolToHyperliquid(symbol)
-	if _, err := t.exchange.Cancel(t.ctx, coin, int(orderID)); err != nil {
+	if _, err := t.exchange.Cancel(t.ctx, coin, orderID); err != nil {
+		// Hyperliquid 特殊错误：订单不存在/已取消/已成交
+		// 对于前端“取消挂单”来说，应视为幂等成功
+		if strings.Contains(err.Error(), "Order was never placed, already canceled, or filled") {
+			log.Printf("  ℹ Hyperliquid 取消挂单为幂等操作: %v", err)
+			return nil
+		}
 		return fmt.Errorf("取消订单失败: %w", err)
 	}
 	return nil
