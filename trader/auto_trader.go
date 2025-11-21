@@ -851,6 +851,37 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Performance:    performance, // 添加历史表现分析
 	}
 
+	// 8. 填充最近AI决策摘要（用于LLM自我对照，限制频繁推翻前几轮自己的决策）
+	if at.decisionLogger != nil {
+		if records, err := at.decisionLogger.GetLatestRecords(5); err == nil {
+			var recent []string
+			// 从新到旧构建摘要，最多5条
+			for i := len(records) - 1; i >= 0; i-- {
+				rec := records[i]
+				if len(rec.Decisions) == 0 {
+					continue
+				}
+				dec := rec.Decisions[0]
+				line := fmt.Sprintf("%s | %s %s @ %.4f | lev=%dx | success=%v",
+					rec.Timestamp.Format("01-02 15:04"),
+					dec.Symbol, dec.Action, dec.Price, dec.Leverage, dec.Success,
+				)
+				if dec.StrategyCode != "" {
+					line += " | strategy=" + dec.StrategyCode
+				}
+				if rec.ErrorMessage != "" {
+					line += " | err=" + rec.ErrorMessage
+				}
+				// 控制单行长度，避免占用过多token
+				if len(line) > 200 {
+					line = line[:200] + "..."
+				}
+				recent = append(recent, line)
+			}
+			ctx.RecentDecisions = recent
+		}
+	}
+
 	// 可选：注入新闻（控制 token 体积）
 	if at.GetIncludeNews() {
 		// 选取待注入的符号：优先当前持仓前2个，其次候选前1个

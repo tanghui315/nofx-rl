@@ -101,7 +101,9 @@ type Context struct {
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
 	// 最新新闻（可选，控制条数，避免过长），由异常/全权路径注入
-	News []NewsBrief `json:"-"`
+	News            []NewsBrief `json:"-"`
+	// 最近AI决策摘要（最多5条，用于LLM自我检查前后一致性，减少频繁推翻前几轮决策）
+	RecentDecisions []string `json:"-"`
 }
 
 // NewsBrief 简要新闻条目
@@ -127,7 +129,8 @@ type Decision struct {
 
 	// 开仓参数
 	Leverage        int     `json:"leverage,omitempty"`
-	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
+	MarginUSD       float64 `json:"margin_usd,omitempty"`        // 本笔计划使用的保证金（由LLM直接给出）
+	PositionSizeUSD float64 `json:"position_size_usd,omitempty"` // 名义仓位（由保证金×杠杆推导，可兼容旧字段）
 	StopLoss        float64 `json:"stop_loss,omitempty"`
 	TakeProfit      float64 `json:"take_profit,omitempty"`
 
@@ -144,6 +147,30 @@ type Decision struct {
 	
 	// 策略路由信息 (新增，用于前端展示)
 	StrategyCode string `json:"strategy_code,omitempty"` // e.g., "trend_carry", "range_grid"
+}
+
+// NormalizeSizing 根据保证金与杠杆推导名义仓位（PositionSizeUSD），或在仅给出名义仓位时反推保证金。
+// 这样既支持新的 margin_usd 驱动模式，也兼容旧的 position_size_usd 决策格式。
+func (d *Decision) NormalizeSizing() error {
+	// 仅对开仓动作做归一化
+	if d.Action != "open_long" && d.Action != "open_short" {
+		return nil
+	}
+
+	if d.Leverage <= 0 {
+		return fmt.Errorf("杠杆必须大于0: %d", d.Leverage)
+	}
+
+	// 优先使用 margin_usd 推导名义仓位
+	if d.MarginUSD > 0 && d.PositionSizeUSD <= 0 {
+		// 名义价值 = 保证金 × 杠杆
+		d.PositionSizeUSD = d.MarginUSD * float64(d.Leverage)
+	} else if d.MarginUSD <= 0 && d.PositionSizeUSD > 0 {
+		// 兼容旧字段：仅给出 position_size_usd 时，反推出保证金
+		d.MarginUSD = d.PositionSizeUSD / float64(d.Leverage)
+	}
+
+	return nil
 }
 
 // FullDecision AI的完整决策（包含思维链）
@@ -357,7 +384,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 		accountEquity*0.8, accountEquity*1.5, accountEquity*5, accountEquity*10))
 	sb.WriteString(fmt.Sprintf("4. 杠杆限制: **山寨币最大%dx杠杆** | **BTC/ETH最大%dx杠杆** (⚠️ 严格执行，不可超过)\n", altcoinLeverage, btcEthLeverage))
 	sb.WriteString("5. 保证金: 总使用率 ≤ 90%\n")
-	sb.WriteString("6. 开仓金额: 建议 **≥12 USDT** (交易所最小名义价值 10 USDT + 安全边际)\n\n")
+	sb.WriteString("6. 开仓金额: 山寨建议 **≥12 USDT**，BTC/ETH 建议 **≥20 USDT**（与系统最小名义价值硬约束一致，用于避免数量被四舍五入为0或触发交易所最小名义限制）\n\n")
 
 	// 3. 输出格式 - 动态生成
 	sb.WriteString("#输出格式\n\n")
@@ -365,7 +392,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("简洁分析你的思考过程\n\n")
 	sb.WriteString("第二步: JSON决策数组\n\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"order_type\": \"limit\", \"limit_price\": 92750, \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"time_in_force\": \"GTC\", \"post_only\": true, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"order_type\": \"limit\", \"limit_price\": 92750, \"margin_usd\": %.0f, \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"time_in_force\": \"GTC\", \"post_only\": true, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", accountEquity*0.1, btcEthLeverage, accountEquity*0.1*float64(btcEthLeverage)))
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("字段说明:\n")
@@ -375,7 +402,12 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- `limit_price`: 仅当 order_type 为 limit 时必填，对应限价单价格\n")
 	sb.WriteString("- `time_in_force`: GTC | IOC | FOK（可选，默认 GTC）\n")
 	sb.WriteString("- `post_only`: true | false（可选，仅在限价单时有效，true 表示只做 Maker）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning；如使用限价单，还必须提供 order_type=limit 和 limit_price\n\n")
+	sb.WriteString("- `margin_usd`: 本单计划使用的保证金（USDT，建议≥10）；系统将按 position_size_usd = margin_usd × leverage 自动换算名义价值\n")
+	sb.WriteString("- `position_size_usd`: 名义仓位价值（quantity × price）。如填写，必须与 margin_usd × leverage 大致一致，否则以后可能被系统忽略，以内部计算为准\n")
+	sb.WriteString("- `new_stop_loss`: 仅当 action = update_stop_loss 或 partial_close 时使用，表示新的止损价格，必须 > 0；若无法给出合理的新止损，请不要使用 update_stop_loss，改用 hold\n")
+	sb.WriteString("- `new_take_profit`: 仅当 action = update_take_profit 或 partial_close 时使用，表示新的止盈价格，必须 > 0；若无法给出合理的新止盈，请不要使用 update_take_profit，改用 hold\n")
+	sb.WriteString("- `close_percentage`: 仅当 action = partial_close 时使用，表示本次平掉的仓位比例（0-100），同时通常需要提供 new_stop_loss 与/或 new_take_profit 为剩余仓位恢复保护\n")
+	sb.WriteString("- 开仓时必填: margin_usd, leverage, stop_loss, take_profit, confidence, risk_usd, reasoning；如使用限价单，还必须提供 order_type=limit 和 limit_price\n\n")
 
 	return sb.String()
 }
@@ -465,6 +497,15 @@ func buildUserPrompt(ctx *Context) string {
 		sb.WriteString("\n")
 	} else {
 		sb.WriteString("当前挂单: 无\n\n")
+	}
+
+	// 最近AI决策摘要（用于自我检查前后一致性，避免频繁推翻前几轮决策）
+	if len(ctx.RecentDecisions) > 0 {
+		sb.WriteString("## 最近AI决策（最多5条，用于自我检查前后一致性）\n")
+		for _, line := range ctx.RecentDecisions {
+			sb.WriteString("- " + line + "\n")
+		}
+		sb.WriteString("\n")
 	}
 
 	// 候选币种（完整市场数据）
@@ -724,8 +765,13 @@ func compactArrayOpen(s string) string {
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
 func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
-	for i, decision := range decisions {
-		if err := validateDecision(&decision, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+	for i := range decisions {
+		// 先根据保证金与杠杆归一化名义仓位（支持 margin_usd 驱动，也兼容旧的 position_size_usd）
+		if err := decisions[i].NormalizeSizing(); err != nil {
+			return fmt.Errorf("决策 #%d 仓位归一化失败: %w", i+1, err)
+		}
+
+		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
 			return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
 		}
 	}
@@ -803,6 +849,10 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if d.Leverage <= 0 || d.Leverage > maxLeverage {
 			return fmt.Errorf("杠杆必须在1-%d之间（%s，当前配置上限%d倍）: %d", maxLeverage, d.Symbol, maxLeverage, d.Leverage)
 		}
+		// margin_usd 为 LLM 主要决策字段，PositionSizeUSD 由归一化逻辑推导
+		if d.MarginUSD <= 0 {
+			return fmt.Errorf("保证金必须大于0: %.2f", d.MarginUSD)
+		}
 		if d.PositionSizeUSD <= 0 {
 			return fmt.Errorf("仓位大小必须大于0: %.2f", d.PositionSizeUSD)
 		}
@@ -810,7 +860,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		// ✅ 验证最小开仓金额（防止数量格式化为 0 的错误）
 		// Binance 最小名义价值 10 USDT + 安全边际
 		const minPositionSizeGeneral = 12.0 // 10 + 20% 安全边际
-		const minPositionSizeBTCETH = 60.0  // BTC/ETH 因价格高和精度限制需要更大金额（更灵活）
+		const minPositionSizeBTCETH = 12.0  // BTC/ETH 因价格高和精度限制需要略大金额，但对小账户更友好
 
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
 			if d.PositionSizeUSD < minPositionSizeBTCETH {
