@@ -804,17 +804,17 @@ func findMatchingBracket(s string, start int) int {
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
 	// 验证action
 	validActions := map[string]bool{
-		"open_long":          true,
-		"open_short":         true,
-		"close_long":         true,
-		"close_short":        true,
-		"update_stop_loss":   true,
-		"update_take_profit": true,
-		"partial_close":      true,
-		"cancel_limit_order": true,
+		"open_long":           true,
+		"open_short":          true,
+		"close_long":          true,
+		"close_short":         true,
+		"update_stop_loss":    true,
+		"update_take_profit":  true,
+		"partial_close":       true,
+		"cancel_limit_order":  true,
 		"replace_limit_order": true,
-		"hold":               true,
-		"wait":               true,
+		"hold":                true,
+		"wait":                true,
 	}
 
 	if !validActions[d.Action] {
@@ -823,19 +823,35 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 
 	// 开仓操作必须提供完整参数
 	if d.Action == "open_long" || d.Action == "open_short" {
-		// 默认 OrderType 为 market
-		if d.OrderType == "" {
-			d.OrderType = "market"
-		}
-		
-		// 验证限价单
-		if strings.ToLower(d.OrderType) == "limit" {
+		// 订单类型约束：当前系统默认只允许使用 LIMIT 限价单开仓
+		forceLimit := os.Getenv("NOFX_FORCE_LIMIT_ORDERS")
+		forceLimitEnabled := (forceLimit == "" || forceLimit == "1" || strings.ToLower(forceLimit) == "true")
+
+		if forceLimitEnabled {
+			// 强制限价单模式：不接受 market 开仓
+			if d.OrderType == "" {
+				d.OrderType = "limit"
+			}
+			if strings.ToLower(d.OrderType) != "limit" {
+				return fmt.Errorf("当前配置仅允许使用限价单开仓，请将 order_type 设置为 \"limit\" 并提供有效的 limit_price")
+			}
 			if d.LimitPrice <= 0 {
 				return fmt.Errorf("限价单必须提供有效的 LimitPrice: %.2f", d.LimitPrice)
 			}
-		} else if strings.ToLower(d.OrderType) != "market" {
-			// 暂不支持其他类型
-			return fmt.Errorf("不支持的订单类型: %s (仅支持 market, limit)", d.OrderType)
+		} else {
+			// 兼容旧模式：支持 market / limit
+			if d.OrderType == "" {
+				d.OrderType = "market"
+			}
+
+			if strings.ToLower(d.OrderType) == "limit" {
+				if d.LimitPrice <= 0 {
+					return fmt.Errorf("限价单必须提供有效的 LimitPrice: %.2f", d.LimitPrice)
+				}
+			} else if strings.ToLower(d.OrderType) != "market" {
+				// 暂不支持其他类型
+				return fmt.Errorf("不支持的订单类型: %s (仅支持 market, limit)", d.OrderType)
+			}
 		}
 
 		// 根据币种使用配置的杠杆上限
@@ -926,6 +942,40 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if riskRewardRatio < 3.0 {
 			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥3.0:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
 				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+		}
+
+		// ===== 单笔风险 & 单币风险暴露（账户维度硬风控）=====
+		// accountEquity 由调用方传入，为当前账户净值（钱包余额 + 未实现盈亏）
+		if accountEquity > 0 {
+			// 1) 单笔风险上限：按止损距离粗略估算最大亏损金额
+			if riskPercent > 0 {
+				maxRiskPct := 4.0 // 默认单笔不超过账户净值 4%
+				if v := os.Getenv("NOFX_MAX_TRADE_RISK_PCT"); v != "" {
+					if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f < 100 {
+						maxRiskPct = f
+					}
+				}
+
+				estRiskUSD := d.PositionSizeUSD * (riskPercent / 100.0)
+				maxRiskUSD := accountEquity * maxRiskPct / 100.0
+				if estRiskUSD > maxRiskUSD {
+					return fmt.Errorf("单笔风险过大: 预计亏损%.2f USDT (%.2f%%)，超过上限%.2f%% [名义仓位:%.2f]",
+						estRiskUSD, estRiskUSD/accountEquity*100.0, maxRiskPct, d.PositionSizeUSD)
+				}
+			}
+
+			// 2) 单币保证金暴露上限：margin_usd 相对净值的占比
+			maxMarginPct := 30.0 // 对单一币种，保证金默认不超过账户净值的 30%
+			if v := os.Getenv("NOFX_MAX_SYMBOL_MARGIN_PCT"); v != "" {
+				if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 100 {
+					maxMarginPct = f
+				}
+			}
+			marginPct := d.MarginUSD / accountEquity * 100.0
+			if marginPct > maxMarginPct {
+				return fmt.Errorf("单币种保证金暴露过高: 保证金%.2f USDT (%.1f%%净值) > 上限%.1f%%",
+					d.MarginUSD, marginPct, maxMarginPct)
+			}
 		}
 	}
 

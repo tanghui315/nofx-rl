@@ -1413,6 +1413,61 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 			totalRequired, requiredMargin, estimatedFee, availableBalance)
 	}
 
+	// 账户层保证金使用率预测（开仓后）: 防止总体风险过高
+	maxMarginPct := 70.0 // 默认开仓后保证金使用率不超过 70%
+	if v := os.Getenv("NOFX_MAX_MARGIN_USED_PCT"); v != "" {
+		if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 && f <= 100 {
+			maxMarginPct = f
+		}
+	}
+	// 从余额信息推导当前总净值
+	totalWalletBalance := 0.0
+	totalUnrealizedProfit := 0.0
+	if w, ok := balance["totalWalletBalance"].(float64); ok {
+		totalWalletBalance = w
+	}
+	if u, ok := balance["totalUnrealizedProfit"].(float64); ok {
+		totalUnrealizedProfit = u
+	}
+	totalEquity := totalWalletBalance + totalUnrealizedProfit
+	if totalEquity > 0 {
+		// 重新获取当前持仓，估算已用保证金
+		positions2, errPos := at.trader.GetPositions()
+		if errPos != nil {
+			return fmt.Errorf("获取持仓失败: %w", errPos)
+		}
+		totalMarginUsed := 0.0
+		for _, pos := range positions2 {
+			qty, _ := pos["positionAmt"].(float64)
+			if qty < 0 {
+				qty = -qty
+			}
+			if qty == 0 {
+				continue
+			}
+			entryPrice, _ := pos["entryPrice"].(float64)
+			markPrice, _ := pos["markPrice"].(float64)
+			price := markPrice
+			if price <= 0 {
+				price = entryPrice
+			}
+			if price <= 0 {
+				continue
+			}
+			lev := 10.0 // 默认杠杆，若取不到使用 10x
+			if l, ok := pos["leverage"].(float64); ok && l > 0 {
+				lev = l
+			}
+			totalMarginUsed += (qty * price) / lev
+		}
+		newMarginUsed := totalMarginUsed + requiredMargin
+		newMarginPct := newMarginUsed / totalEquity * 100.0
+		if newMarginPct > maxMarginPct {
+			return fmt.Errorf("开仓后保证金使用率预计 %.1f%%，超过上限 %.1f%%（当前已用约 %.1f%%）",
+				newMarginPct, maxMarginPct, (totalMarginUsed/totalEquity)*100.0)
+		}
+	}
+
 	// 设置仓位模式
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
 		log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
@@ -1601,20 +1656,75 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		availableBalance = avail
 	}
 
-	// 手续费估算（Taker费率 0.04%）
-	estimatedFee := decision.PositionSizeUSD * 0.0004
-	totalRequired := requiredMargin + estimatedFee
+		// 手续费估算（Taker费率 0.04%）
+		estimatedFee := decision.PositionSizeUSD * 0.0004
+		totalRequired := requiredMargin + estimatedFee
+	
+		if totalRequired > availableBalance {
+			return fmt.Errorf("❌ 保证金不足: 需要 %.2f USDT（保证金 %.2f + 手续费 %.2f），可用 %.2f USDT",
+				totalRequired, requiredMargin, estimatedFee, availableBalance)
+		}
 
-	if totalRequired > availableBalance {
-		return fmt.Errorf("❌ 保证金不足: 需要 %.2f USDT（保证金 %.2f + 手续费 %.2f），可用 %.2f USDT",
-			totalRequired, requiredMargin, estimatedFee, availableBalance)
-	}
-
-	// 设置仓位模式
-	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
-		log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
-		// 继续执行，不影响交易
-	}
+		// 账户层保证金使用率预测（开仓后）: 防止总体风险过高
+		maxMarginPct := 70.0 // 默认开仓后保证金使用率不超过 70%
+		if v := os.Getenv("NOFX_MAX_MARGIN_USED_PCT"); v != "" {
+			if f, e := strconv.ParseFloat(v, 64); e == nil && f > 0 && f <= 100 {
+				maxMarginPct = f
+			}
+		}
+		// 从余额信息推导当前总净值
+		totalWalletBalance := 0.0
+		totalUnrealizedProfit := 0.0
+		if w, ok := balance["totalWalletBalance"].(float64); ok {
+			totalWalletBalance = w
+		}
+		if u, ok := balance["totalUnrealizedProfit"].(float64); ok {
+			totalUnrealizedProfit = u
+		}
+		totalEquity := totalWalletBalance + totalUnrealizedProfit
+		if totalEquity > 0 {
+			// 重新获取当前持仓，估算已用保证金
+			positions2, errPos := at.trader.GetPositions()
+			if errPos != nil {
+				return fmt.Errorf("获取持仓失败: %w", errPos)
+			}
+			totalMarginUsed := 0.0
+			for _, pos := range positions2 {
+				qty, _ := pos["positionAmt"].(float64)
+				if qty < 0 {
+					qty = -qty
+				}
+				if qty == 0 {
+					continue
+				}
+				entryPrice, _ := pos["entryPrice"].(float64)
+				markPrice, _ := pos["markPrice"].(float64)
+				price := markPrice
+				if price <= 0 {
+					price = entryPrice
+				}
+				if price <= 0 {
+					continue
+				}
+				lev := 10.0 // 默认杠杆，若取不到使用 10x
+				if l, ok := pos["leverage"].(float64); ok && l > 0 {
+					lev = l
+				}
+				totalMarginUsed += (qty * price) / lev
+			}
+			newMarginUsed := totalMarginUsed + requiredMargin
+			newMarginPct := newMarginUsed / totalEquity * 100.0
+			if newMarginPct > maxMarginPct {
+				return fmt.Errorf("开仓后保证金使用率预计 %.1f%%，超过上限 %.1f%%（当前已用约 %.1f%%）",
+					newMarginPct, maxMarginPct, (totalMarginUsed/totalEquity)*100.0)
+			}
+		}
+	
+		// 设置仓位模式
+		if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
+			log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
+			// 继续执行，不影响交易
+		}
 
 	// 设置杠杆 (通用)
 	if err := at.trader.SetLeverage(decision.Symbol, decision.Leverage); err != nil {
