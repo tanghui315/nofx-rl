@@ -104,6 +104,7 @@ type AutoTrader struct {
 	stopUntil             time.Time
 	isRunning             bool
 	startTime             time.Time          // 系统启动时间
+	lastDecisionTime      time.Time
 	callCount             int                // AI调用次数
 	positionFirstSeenTime map[string]int64   // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	stopMonitorCh         chan struct{}      // 用于停止监控goroutine
@@ -407,10 +408,10 @@ func (at *AutoTrader) autoSyncBalanceIfNeeded() {
 
 // runCycle 运行一个交易周期（使用AI全权决策）
 func (at *AutoTrader) runCycle() error {
-	at.callCount++
+	now := time.Now()
 
 	log.Print("\n" + strings.Repeat("=", 70) + "\n")
-	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
+	log.Printf("⏰ %s - AI决策周期 #%d", now.Format("2006-01-02 15:04:05"), at.callCount+1)
 	log.Println(strings.Repeat("=", 70))
 
 	// 创建决策记录
@@ -478,6 +479,36 @@ func (at *AutoTrader) runCycle() error {
 
 	log.Printf("📊 账户净值: %.2f USDT | 可用: %.2f USDT | 持仓: %d",
 		ctx.Account.TotalEquity, ctx.Account.AvailableBalance, ctx.Account.PositionCount)
+
+	minInterval := at.calcMinDecisionInterval(ctx)
+	maxNoLLMInterval := 15 * time.Minute
+
+	if !at.lastDecisionTime.IsZero() {
+		sinceLast := now.Sub(at.lastDecisionTime)
+		if sinceLast < minInterval && sinceLast < maxNoLLMInterval {
+			log.Printf("⏸ 调度：跳过本轮AI决策 (pos=%d, open_orders=%d, margin_used=%.1f%%, since_last=%.0fs, min_interval=%.0fs)",
+				ctx.Account.PositionCount,
+				len(ctx.OpenOrders),
+				ctx.Account.MarginUsedPct,
+				sinceLast.Seconds(),
+				minInterval.Seconds(),
+			)
+			record.Success = true
+			record.ErrorMessage = fmt.Sprintf("调度跳过本轮AI决策: pos=%d, open_orders=%d, since_last=%.0fs, min_interval=%.0fs",
+				ctx.Account.PositionCount,
+				len(ctx.OpenOrders),
+				sinceLast.Seconds(),
+				minInterval.Seconds(),
+			)
+			if err := at.decisionLogger.LogDecision(record); err != nil {
+				log.Printf("⚠ 保存决策记录失败: %v", err)
+			}
+			return nil
+		}
+	}
+
+	at.callCount++
+	at.lastDecisionTime = now
 
 	// --- 策略路由与分组并行执行 (v2) ---
 
@@ -665,6 +696,103 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	return nil
+}
+
+func (at *AutoTrader) calcMinDecisionInterval(ctx *decision.Context) time.Duration {
+	base := at.config.ScanInterval
+	if base <= 0 {
+		base = 3 * time.Minute
+	}
+
+	factor := 1.0
+
+	posCount := ctx.Account.PositionCount
+	openOrderCount := len(ctx.OpenOrders)
+
+	if posCount >= 2 {
+		factor *= 2
+	}
+
+	if openOrderCount >= 2 {
+		factor *= 2
+	}
+
+	if ctx.Account.MarginUsedPct >= 50 {
+		factor *= 1.5
+	}
+
+	if at.hasFreshUnprotectedPosition(ctx) {
+		factor = 1.0
+	} else if (posCount > 0 || openOrderCount > 0) && at.isRecentNoOpCycles(3) {
+		factor *= 1.5
+	}
+
+	if factor < 1.0 {
+		factor = 1.0
+	}
+	if factor > 4.0 {
+		factor = 4.0
+	}
+
+	return time.Duration(float64(base) * factor)
+}
+
+func (at *AutoTrader) hasFreshUnprotectedPosition(ctx *decision.Context) bool {
+	if ctx == nil {
+		return false
+	}
+
+	nowMs := time.Now().UnixMilli()
+	freshThresholdMs := int64((10 * time.Minute) / time.Millisecond)
+
+	for _, p := range ctx.Positions {
+		if p.Quantity <= 0 {
+			continue
+		}
+		if p.StopLoss > 0 {
+			continue
+		}
+		if p.UpdateTime <= 0 {
+			continue
+		}
+		age := nowMs - p.UpdateTime
+		if age >= 0 && age < freshThresholdMs {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (at *AutoTrader) isRecentNoOpCycles(n int) bool {
+	if at.decisionLogger == nil || n <= 0 {
+		return false
+	}
+
+	records, err := at.decisionLogger.GetLatestRecords(n)
+	if err != nil {
+		return false
+	}
+
+	if len(records) == 0 {
+		return false
+	}
+
+	for _, rec := range records {
+		hasActive := false
+		for _, act := range rec.Decisions {
+			action := strings.ToLower(act.Action)
+			if action != "hold" && action != "wait" && action != "" {
+				hasActive = true
+				break
+			}
+		}
+		if hasActive {
+			return false
+		}
+	}
+
+	return true
 }
 
 // buildTradingContext 构建交易上下文
