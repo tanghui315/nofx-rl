@@ -297,6 +297,24 @@ export const api = {
     return res.json()
   },
 
+  // 获取挂单列表（支持trader_id）
+  async getOpenOrders(traderId?: string, symbol?: string): Promise<any[]> {
+    const params = new URLSearchParams()
+    if (traderId) params.append('trader_id', traderId)
+    if (symbol) params.append('symbol', symbol)
+    
+    const url = `${API_BASE}/orders/open?${params.toString()}`
+    const res = await fetch(url, {
+      headers: getAuthHeaders(),
+    })
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
+    if (!res.ok) throw new Error('获取挂单列表失败')
+    return res.json()
+  },
+
   // 手动平仓
   async closePosition(
     traderId: string,
@@ -326,6 +344,38 @@ export const api = {
     if (!res.ok) {
       const error = await res.json()
       throw new Error(error.error || '平仓失败')
+    }
+
+    return res.json()
+  },
+
+  // 手动取消挂单
+  async cancelOrder(
+    traderId: string,
+    symbol: string,
+    orderId: number
+  ): Promise<{ message: string; result: any }> {
+    const res = await fetch(`${API_BASE}/orders/cancel`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trader_id: traderId,
+        symbol,
+        order_id: orderId,
+      }),
+    })
+
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
+
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.error || '取消订单失败')
     }
 
     return res.json()

@@ -57,6 +57,17 @@ export const translations = {
     closeSuccess: 'Position closed successfully',
     closeFailed: 'Failed to close position',
 
+    // Strategy Routing & Open Orders
+    strategyRouting: 'Strategy Routing',
+    openOrders: 'Open Orders',
+    type: 'Type',
+    price: 'Price',
+    filled: 'Filled',
+    cancel: 'Cancel',
+    cancelling: 'Cancelling...',
+    confirmCancelOrder: 'Are you sure you want to cancel this order?',
+    cancelOrderFailed: 'Failed to cancel order',
+
     // Recent Decisions
     recentDecisions: 'Recent Decisions',
     lastCycles: 'Last {count} trading cycles',
@@ -167,7 +178,6 @@ export const translations = {
     selectExchange: 'Select Exchange',
     traderName: 'Trader Name',
     enterTraderName: 'Enter trader name',
-    cancel: 'Cancel',
     create: 'Create',
     configureAIModels: 'Configure AI Models',
     configureExchanges: 'Configure Exchanges',
@@ -747,6 +757,17 @@ export const translations = {
     closeSuccess: '平仓成功',
     closeFailed: '平仓失败',
 
+    // Strategy Routing & Open Orders
+    strategyRouting: '策略路由',
+    openOrders: '当前挂单',
+    type: '类型',
+    price: '价格',
+    filled: '成交',
+    cancel: '撤单',
+    cancelling: '撤单中...',
+    confirmCancelOrder: '确定要撤销该订单吗？',
+    cancelOrderFailed: '撤单失败',
+
     // Recent Decisions
     recentDecisions: '最近决策',
     lastCycles: '最近 {count} 个交易周期',
@@ -856,7 +877,6 @@ export const translations = {
     selectExchange: '选择交易所',
     traderName: '交易员名称',
     enterTraderName: '输入交易员名称',
-    cancel: '取消',
     create: '创建',
     configureAIModels: '配置AI模型',
     configureExchanges: '配置交易所',

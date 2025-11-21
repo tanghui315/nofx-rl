@@ -1270,3 +1270,17 @@ func (t *AsterTrader) FormatQuantity(symbol string, quantity float64) (string, e
 	}
 	return fmt.Sprintf("%v", formatted), nil
 }
+
+// --- 新接口实现 (暂未适配) ---
+
+func (t *AsterTrader) CreateOrder(req *OrderRequest) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("AsterTrader: CreateOrder not implemented yet")
+}
+
+func (t *AsterTrader) GetOpenOrders(symbol string) ([]*OpenOrder, error) {
+	return nil, fmt.Errorf("AsterTrader: GetOpenOrders not implemented yet")
+}
+
+func (t *AsterTrader) CancelOrder(symbol string, orderID int64) error {
+	return fmt.Errorf("AsterTrader: CancelOrder not implemented yet")
+}

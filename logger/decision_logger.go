@@ -14,20 +14,24 @@ import (
 // DecisionRecord 决策记录
 type DecisionRecord struct {
     // Source 用于标记来源（如 "anomaly"），便于前端做区分
-    Source         string             `json:"source,omitempty"`
-    Timestamp      time.Time          `json:"timestamp"`       // 决策时间
-    CycleNumber    int                `json:"cycle_number"`    // 周期编号
-    SystemPrompt   string             `json:"system_prompt"`   // 系统提示词（发送给AI的系统prompt）
-	InputPrompt    string             `json:"input_prompt"`    // 发送给AI的输入prompt
-	CoTTrace       string             `json:"cot_trace"`       // AI思维链（输出）
-	DecisionJSON   string             `json:"decision_json"`   // 决策JSON
-	AccountState   AccountSnapshot    `json:"account_state"`   // 账户状态快照
-	Positions      []PositionSnapshot `json:"positions"`       // 持仓快照
-	CandidateCoins []string           `json:"candidate_coins"` // 候选币种列表
-	Decisions      []DecisionAction   `json:"decisions"`       // 执行的决策
-	ExecutionLog   []string           `json:"execution_log"`   // 执行日志
-	Success        bool               `json:"success"`         // 是否成功
-	ErrorMessage   string             `json:"error_message"`   // 错误信息（如果有）
+    Source          string             `json:"source,omitempty"`
+    Timestamp       time.Time          `json:"timestamp"`       // 决策时间
+    CycleNumber     int                `json:"cycle_number"`    // 周期编号
+    SystemPrompt    string             `json:"system_prompt"`   // 主交易 Agent 的系统提示词
+    InputPrompt     string             `json:"input_prompt"`    // 主交易 Agent 的输入prompt
+    CoTTrace        string             `json:"cot_trace"`       // 主交易 Agent 的思维链（输出）
+    DecisionJSON    string             `json:"decision_json"`   // 主交易 Agent 的决策JSON
+    AccountState    AccountSnapshot    `json:"account_state"`   // 账户状态快照
+    Positions       []PositionSnapshot `json:"positions"`       // 持仓快照
+    CandidateCoins  []string           `json:"candidate_coins"` // 候选币种列表
+    StrategyRouting map[string]string  `json:"strategy_routing,omitempty"`
+    RouterSystemPrompt string          `json:"router_system_prompt,omitempty"` // Router Agent 系统提示词
+    RouterInputPrompt  string          `json:"router_input_prompt,omitempty"`  // Router Agent 输入 prompt
+    RouterRawOutput    string          `json:"router_raw_output,omitempty"`    // Router Agent 原始输出
+    Decisions       []DecisionAction   `json:"decisions"`       // 执行的决策
+    ExecutionLog    []string           `json:"execution_log"`   // 执行日志
+    Success         bool               `json:"success"`         // 是否成功
+    ErrorMessage    string             `json:"error_message"`   // 错误信息（如果有）
 }
 
 // SetSource 兼容性辅助：允许外部通过接口方式设置来源
@@ -56,15 +60,16 @@ type PositionSnapshot struct {
 
 // DecisionAction 决策动作
 type DecisionAction struct {
-	Action    string    `json:"action"`    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
-	Symbol    string    `json:"symbol"`    // 币种
-	Quantity  float64   `json:"quantity"`  // 数量（部分平仓时使用）
-	Leverage  int       `json:"leverage"`  // 杠杆（开仓时）
-	Price     float64   `json:"price"`     // 执行价格
-	OrderID   int64     `json:"order_id"`  // 订单ID
-	Timestamp time.Time `json:"timestamp"` // 执行时间
-	Success   bool      `json:"success"`   // 是否成功
-	Error     string    `json:"error"`     // 错误信息
+	Action       string    `json:"action"`                  // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
+	Symbol       string    `json:"symbol"`                  // 币种
+	StrategyCode string    `json:"strategy_code,omitempty"` // 策略代码
+	Quantity     float64   `json:"quantity"`                // 数量（部分平仓时使用）
+	Leverage     int       `json:"leverage"`                // 杠杆（开仓时）
+	Price        float64   `json:"price"`                   // 执行价格
+	OrderID      int64     `json:"order_id"`                // 订单ID
+	Timestamp    time.Time `json:"timestamp"`               // 执行时间
+	Success      bool      `json:"success"`                 // 是否成功
+	Error        string    `json:"error"`                   // 错误信息
 }
 
 // DecisionLogger 决策日志记录器

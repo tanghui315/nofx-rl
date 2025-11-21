@@ -57,6 +57,46 @@ type Trader interface {
     // positionSide: "LONG" 或 "SHORT"（某些交易所可能不区分，返回符号维度的价格）
     // 返回：stopLoss, takeProfit（不存在时为0）
     GetStopTakePrices(symbol string, positionSide string) (float64, float64, error)
+
+    // CreateOrder 创建订单（通用接口，支持限价单/只做Maker等）
+    CreateOrder(req *OrderRequest) (map[string]interface{}, error)
+
+    // GetOpenOrders 获取当前挂单
+    GetOpenOrders(symbol string) ([]*OpenOrder, error)
+
+    // CancelOrder 取消指定订单
+    CancelOrder(symbol string, orderID int64) error
+}
+
+// OrderRequest 创建订单请求参数
+type OrderRequest struct {
+    Symbol       string
+    Side         string  // BUY, SELL
+    PositionSide string  // LONG, SHORT (合约专用)
+    Type         string  // MARKET, LIMIT, STOP, STOP_MARKET, TAKE_PROFIT, TAKE_PROFIT_MARKET
+    Quantity     float64
+    Price        float64 // 委托价格 (Limit单必填)
+    StopPrice    float64 // 触发价格 (Stop/TakeProfit单必填)
+    TimeInForce  string  // GTC, IOC, FOK (默认GTC)
+    PostOnly     bool    // 只做Maker (仅Limit单有效)
+    ReduceOnly   bool    // 只减仓 (用于平仓单)
+}
+
+// OpenOrder 当前挂单信息
+type OpenOrder struct {
+    Symbol        string
+    OrderID       int64
+    ClientOrderID string
+    Side          string
+    PositionSide  string
+    Type          string
+    Price         float64
+    StopPrice     float64
+    OrigQty       float64
+    ExecutedQty   float64
+    Status        string
+    Time          time.Time
+    UpdateTime    time.Time
 }
 
 // StdUMTrade 标准化的交易填充（统一账户/合约）
