@@ -12,10 +12,11 @@ import (
 
 // StrategyRoute 策略路由信息
 type StrategyRoute struct {
-	Symbol       string    `json:"symbol"`
-	StrategyCode string    `json:"strategy_code"` // 策略代码 (e.g. "trend_carry", "adaptive_moderate_v6_3")
-	Reason       string    `json:"reason"`        // 路由理由
-	UpdateTime   time.Time `json:"update_time"`   // 更新时间
+	Symbol         string    `json:"symbol"`
+	StrategyCode   string    `json:"strategy_code"`             // 策略代码 (e.g. "trend_carry", "adaptive_moderate_v6_3")
+	Reason         string    `json:"reason"`                    // 路由理由
+	UpdateTime     time.Time `json:"update_time"`               // 更新时间
+	TrendDirection string    `json:"trend_direction,omitempty"` // 趋势方向: bullish / bearish / sideways / unknown
 }
 
 // RouterTrace 用于记录本次 Router Agent 调用所使用的提示词与原始输出，便于写入决策日志
@@ -188,15 +189,27 @@ func (r *Router) AnalyzeRegime(ctx *Context, mcpClient *mcp.Client) (map[string]
 	for _, route := range routes {
 		// 验证 StrategyCode 是否有效（防止 AI 瞎编）
 		validCode := validateStrategyCode(route.StrategyCode, r.DefaultStrategy)
-		
+
+		// 规范化 LLM 返回的趋势方向；如无效则回退到语义分析结果
+		trendDir := normalizeTrendDirection(route.TrendDirection)
+		if trendDir == "" {
+			if data, ok := ctx.MarketDataMap[route.Symbol]; ok && data != nil && data.Semantics != nil {
+				trendDir = data.Semantics.TrendDirection
+			}
+			if trendDir == "" {
+				trendDir = "unknown"
+			}
+		}
+
 		r.routes[route.Symbol] = &StrategyRoute{
-			Symbol:       route.Symbol,
-			StrategyCode: validCode,
-			Reason:       route.Reason,
-			UpdateTime:   now,
+			Symbol:         route.Symbol,
+			StrategyCode:   validCode,
+			Reason:         route.Reason,
+			UpdateTime:     now,
+			TrendDirection: trendDir,
 		}
 		result[route.Symbol] = validCode
-		log.Printf("  👉 路由 [%s] -> %s (理由: %s)", route.Symbol, validCode, route.Reason)
+		log.Printf("  👉 路由 [%s] -> %s (方向: %s, 理由: %s)", route.Symbol, validCode, trendDir, route.Reason)
 	}
 
 	// 5. 填补未被 LLM 提及的币种（如果有遗漏）
@@ -241,15 +254,21 @@ func buildRouterSystemPrompt(defaultStrategy string) string {
    - 行为: 平衡型策略，兼顾趋势和反转。
 
 # Output Format
-必须输出纯 JSON 数组，不要包含 markdown 标记。格式如下：
+必须输出**纯 JSON 数组**，不要包含 markdown 标记。每个元素必须包含以下字段：
+- symbol: 币种名称，例如 "BTCUSDT"
+- strategy_code: 选定的策略代码，例如 "trend_carry"
+- trend_direction: 当前主要趋势方向，必须为以下枚举之一："bullish" | "bearish" | "sideways" | "unknown"
+- reason: 简要的路由理由（可引用 ADX / EMA / 语义化分析中的 trend_xxx 等信号）
+
+示例：
 [
-  {"symbol": "BTCUSDT", "strategy_code": "trend_carry", "reason": "Strong uptrend, ADX 35"},
-  {"symbol": "ETHUSDT", "strategy_code": "range_grid", "reason": "Low vol, Bollinger bands squeezing"}
+	{"symbol": "BTCUSDT", "strategy_code": "trend_carry", "trend_direction": "bullish", "reason": "Strong bullish trend, ADX 35, EMA20>EMA50"},
+	{"symbol": "ETHUSDT", "strategy_code": "range_grid", "trend_direction": "sideways", "reason": "Low ADX, Bollinger bands squeezing"}
 ]
 `, defaultStrategy)
 }
 
-// buildRouterUserPrompt 构建 Router 用户提示词
+// ...
 // 这里复用与主决策 Agent 相同的数据管线，但采用更精简的多因子特征表，专注于“选策略”所需的信息
 func buildRouterUserPrompt(ctx *Context, symbols []string) string {
 	var sb strings.Builder
@@ -421,7 +440,21 @@ func GroupByStrategy(routing map[string]string) map[string][]string {
 	return groups
 }
 
-// GetRoutesSnapshot 获取路由表快照 (用于API展示)
+// normalizeTrendDirection 将 LLM 返回的趋势方向归一化到有限枚举集
+// 支持多种同义表达（如 "up"/"long" -> "bullish"，"down"/"short" -> "bearish"）
+func normalizeTrendDirection(raw string) string {
+	dir := strings.ToLower(strings.TrimSpace(raw))
+	switch dir {
+	case "bull", "bullish", "up", "uptrend", "long", "trend_up":
+		return "bullish"
+	case "bear", "bearish", "down", "downtrend", "short", "trend_down":
+		return "bearish"
+	case "sideways", "range", "flat", "neutral", "sideway":
+		return "sideways"
+	}
+	return ""
+}
+
 func (r *Router) GetRoutesSnapshot() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -429,6 +462,19 @@ func (r *Router) GetRoutesSnapshot() map[string]string {
 	snapshot := make(map[string]string)
 	for sym, route := range r.routes {
 		snapshot[sym] = route.StrategyCode
+	}
+	return snapshot
+}
+
+func (r *Router) GetRoutesTrendSnapshot() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	snapshot := make(map[string]string)
+	for sym, route := range r.routes {
+		if route.TrendDirection != "" {
+			snapshot[sym] = route.TrendDirection
+		}
 	}
 	return snapshot
 }

@@ -774,13 +774,46 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		}
 	}
 
-	// 3. 获取交易员的候选币种池
+	// 3. 获取当前挂单（按交易币种收集，供AI管理）
+	var openOrders []decision.OpenOrderInfo
+	symbolSet := make(map[string]bool)
+	for _, p := range positionInfos {
+		symbolSet[p.Symbol] = true
+	}
+	for _, c := range at.tradingCoins {
+		symbolSet[normalizeSymbol(c)] = true
+	}
+	for sym := range symbolSet {
+		orders, err := at.trader.GetOpenOrders(sym)
+		if err != nil {
+			log.Printf("  ⚠ 获取挂单失败 (%s): %v", sym, err)
+			continue
+		}
+		for _, o := range orders {
+			openOrders = append(openOrders, decision.OpenOrderInfo{
+				Symbol:       o.Symbol,
+				OrderID:      o.OrderID,
+				Side:         o.Side,
+				PositionSide: o.PositionSide,
+				Type:         o.Type,
+				Price:        o.Price,
+				StopPrice:    o.StopPrice,
+				OrigQty:      o.OrigQty,
+				ExecutedQty:  o.ExecutedQty,
+				Status:       o.Status,
+				Time:         o.Time.UnixMilli(),
+				UpdateTime:   o.UpdateTime.UnixMilli(),
+			})
+		}
+	}
+
+	// 4. 获取交易员的候选币种池
 	candidateCoins, err := at.getCandidateCoins()
 	if err != nil {
 		return nil, fmt.Errorf("获取候选币种失败: %w", err)
 	}
 
-	// 4. 计算总盈亏
+	// 5. 计算总盈亏
 	totalPnL := totalEquity - at.initialBalance
 	totalPnLPct := 0.0
 	if at.initialBalance > 0 {
@@ -792,11 +825,11 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		marginUsedPct = (totalMarginUsed / totalEquity) * 100
 	}
 
-	// 5. 分析历史表现（最近100个周期，避免长期持仓的交易记录丢失）
+	// 6. 分析历史表现（最近100个周期，避免长期持仓的交易记录丢失）
 	// 优先使用“交易所成交对账”，失败则回退日志口径，窗口默认500以稳定统计
 	performance := at.analyzePerformanceForContext(500)
 
-	// 6. 构建上下文
+	// 7. 构建上下文
 	ctx := &decision.Context{
 		CurrentTime:     time.Now().Format("2006-01-02 15:04:05"),
 		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
@@ -814,6 +847,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		},
 		Positions:      positionInfos,
 		CandidateCoins: candidateCoins,
+		OpenOrders:     openOrders,
 		Performance:    performance, // 添加历史表现分析
 	}
 
@@ -1102,6 +1136,10 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 		return at.executeUpdateTakeProfitWithRecord(decision, actionRecord)
 	case "partial_close":
 		return at.executePartialCloseWithRecord(decision, actionRecord)
+	case "cancel_limit_order":
+		return at.executeCancelLimitOrderWithRecord(decision, actionRecord)
+	case "replace_limit_order":
+		return at.executeReplaceLimitOrderWithRecord(decision, actionRecord)
 	case "hold", "wait":
 		// 无需执行，仅记录
 		return nil
@@ -1147,7 +1185,15 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		if decision.StopLoss > 0 {
 			riskPct := (entryRefPrice - decision.StopLoss) / entryRefPrice * 100.0
 			if riskPct < minSlPct {
-				return fmt.Errorf("止损过近: %.2f%% < 最小要求 %.2f%%（基于3m ATR与基线）", riskPct, minSlPct)
+				// 后端兜底：可选将止损自动拉到最小允许距离，而不是直接拒绝开仓
+				autoMode := os.Getenv("NOFX_MIN_SL_AUTO_ADJUST")
+				if autoMode == "" || autoMode == "1" || strings.ToLower(autoMode) == "true" {
+					adjStopLoss := entryRefPrice * (1.0 - minSlPct/100.0)
+					log.Printf("  ⚠ 止损过近: %.2f%% < 最小要求 %.2f%%，自动将止损从 %.4f 调整至 %.4f（基于3m ATR与基线）", riskPct, minSlPct, decision.StopLoss, adjStopLoss)
+					decision.StopLoss = adjStopLoss
+				} else {
+					return fmt.Errorf("止损过近: %.2f%% < 最小要求 %.2f%%（基于3m ATR与基线）", riskPct, minSlPct)
+				}
 			}
 		}
 	}
@@ -1337,7 +1383,15 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		if decision.StopLoss > 0 {
 			riskPct := (decision.StopLoss - entryRefPrice) / entryRefPrice * 100.0
 			if riskPct < minSlPct {
-				return fmt.Errorf("止损过近: %.2f%% < 最小要求 %.2f%%（基于3m ATR与基线）", riskPct, minSlPct)
+				// 后端兜底：可选将止损自动拉到最小允许距离，而不是直接拒绝开仓
+				autoMode := os.Getenv("NOFX_MIN_SL_AUTO_ADJUST")
+				if autoMode == "" || autoMode == "1" || strings.ToLower(autoMode) == "true" {
+					adjStopLoss := entryRefPrice * (1.0 + minSlPct/100.0)
+					log.Printf("  ⚠ 止损过近: %.2f%% < 最小要求 %.2f%%，自动将止损从 %.4f 调整至 %.4f（基于3m ATR与基线）", riskPct, minSlPct, decision.StopLoss, adjStopLoss)
+					decision.StopLoss = adjStopLoss
+				} else {
+					return fmt.Errorf("止损过近: %.2f%% < 最小要求 %.2f%%（基于3m ATR与基线）", riskPct, minSlPct)
+				}
 			}
 		}
 	}
@@ -1833,6 +1887,100 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	return nil
 }
 
+// executeCancelLimitOrderWithRecord 撤销指定限价挂单
+func (at *AutoTrader) executeCancelLimitOrderWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	if decision.Symbol == "" {
+		return fmt.Errorf("cancel_limit_order 需要提供 symbol")
+	}
+	if decision.TargetOrderID <= 0 {
+		return fmt.Errorf("cancel_limit_order 需要有效的 target_order_id")
+	}
+
+	log.Printf("  🧹 撤销挂单: %s #%d", decision.Symbol, decision.TargetOrderID)
+	actionRecord.OrderID = decision.TargetOrderID
+
+	if err := at.trader.CancelOrder(decision.Symbol, decision.TargetOrderID); err != nil {
+		return fmt.Errorf("撤销挂单失败: %w", err)
+	}
+
+	log.Printf("  ✓ 撤销挂单成功: %s #%d", decision.Symbol, decision.TargetOrderID)
+	return nil
+}
+
+// executeReplaceLimitOrderWithRecord 撤销旧限价单并按新价格重挂
+func (at *AutoTrader) executeReplaceLimitOrderWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	if decision.Symbol == "" {
+		return fmt.Errorf("replace_limit_order 需要提供 symbol")
+	}
+	if decision.TargetOrderID <= 0 {
+		return fmt.Errorf("replace_limit_order 需要有效的 target_order_id")
+	}
+	if decision.LimitPrice <= 0 {
+		return fmt.Errorf("replace_limit_order 需要新的 limit_price > 0")
+	}
+
+	log.Printf("  🔁 改价挂单: %s #%d → 新价格 %.4f", decision.Symbol, decision.TargetOrderID, decision.LimitPrice)
+	actionRecord.OrderID = decision.TargetOrderID
+
+	// 1) 查询原挂单，复用其方向与数量
+	orders, err := at.trader.GetOpenOrders(decision.Symbol)
+	if err != nil {
+		return fmt.Errorf("获取原挂单失败: %w", err)
+	}
+
+	var src *OpenOrder
+	for _, o := range orders {
+		if o.OrderID == decision.TargetOrderID {
+			src = o
+			break
+		}
+	}
+	if src == nil {
+		return fmt.Errorf("未找到要改价的挂单: %s #%d", decision.Symbol, decision.TargetOrderID)
+	}
+
+	// 2) 先尝试撤销旧单（底层交易器需实现幂等：已成交/已撤视为成功）
+	if err := at.trader.CancelOrder(decision.Symbol, decision.TargetOrderID); err != nil {
+		return fmt.Errorf("撤销原挂单失败: %w", err)
+	}
+
+	// 3) 使用原挂单未成交数量重挂
+	qty := src.OrigQty - src.ExecutedQty
+	if qty <= 0 {
+		qty = src.OrigQty
+	}
+	formattedQtyStr, fmtErr := at.trader.FormatQuantity(decision.Symbol, qty)
+	if fmtErr != nil {
+		return fmt.Errorf("改价挂单失败（数量格式化失败）: %w", fmtErr)
+	}
+	formattedQty, _ := strconv.ParseFloat(formattedQtyStr, 64)
+	if formattedQty <= 0 {
+		return fmt.Errorf("改价挂单数量过小，格式化后为0")
+	}
+
+	req := &OrderRequest{
+		Symbol:       decision.Symbol,
+		Side:         src.Side,
+		PositionSide: src.PositionSide,
+		Type:         "LIMIT",
+		Quantity:     formattedQty,
+		Price:        decision.LimitPrice,
+		TimeInForce:  decision.TimeInForce,
+		PostOnly:     decision.PostOnly,
+	}
+
+	res, err := at.trader.CreateOrder(req)
+	if err != nil {
+		return fmt.Errorf("改价后重新挂单失败: %w", err)
+	}
+	if newID, ok := res["orderId"].(int64); ok {
+		actionRecord.OrderID = newID
+	}
+
+	log.Printf("  ✓ 改价挂单成功: %s 新订单=%v 价格=%.4f 数量=%.4f", decision.Symbol, actionRecord.OrderID, decision.LimitPrice, formattedQty)
+	return nil
+}
+
 // GetID 获取trader ID
 func (at *AutoTrader) GetID() string {
 	return at.id
@@ -1996,6 +2144,7 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 	// 注入策略路由信息
 	if at.router != nil {
 		status["strategy_routing"] = at.router.GetRoutesSnapshot()
+		status["strategy_routing_trend"] = at.router.GetRoutesTrendSnapshot()
 	}
 
 	return status
@@ -2349,10 +2498,12 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 			return 1 // 最高优先级：先平仓（包括部分平仓）
 		case "update_stop_loss", "update_take_profit":
 			return 2 // 调整持仓止盈止损
+		case "cancel_limit_order", "replace_limit_order":
+			return 3 // 清理/调整挂单
 		case "open_long", "open_short":
-			return 3 // 次优先级：后开仓
+			return 4 // 次优先级：后开仓
 		case "hold", "wait":
-			return 4 // 最低优先级：观望
+			return 5 // 最低优先级：观望
 		default:
 			return 999 // 未知动作放最后
 		}

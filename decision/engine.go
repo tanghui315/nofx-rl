@@ -60,6 +60,22 @@ type CandidateCoin struct {
 	Sources []string `json:"sources"` // 来源: "ai500" 和/或 "oi_top"
 }
 
+// OpenOrderInfo 当前挂单信息（供AI决策参考）
+type OpenOrderInfo struct {
+	Symbol       string  `json:"symbol"`
+	OrderID      int64   `json:"order_id"`
+	Side         string  `json:"side"`          // BUY / SELL
+	PositionSide string  `json:"position_side"` // LONG / SHORT / BOTH
+	Type         string  `json:"type"`          // LIMIT / STOP / TAKE_PROFIT ...
+	Price        float64 `json:"price"`
+	StopPrice    float64 `json:"stop_price"`
+	OrigQty      float64 `json:"orig_qty"`
+	ExecutedQty  float64 `json:"executed_qty"`
+	Status       string  `json:"status"`
+	Time         int64   `json:"time"`        // 创建时间（毫秒）
+	UpdateTime   int64   `json:"update_time"` // 更新时间（毫秒）
+}
+
 // OITopData 持仓量增长Top数据（用于AI决策参考）
 type OITopData struct {
 	Rank              int     // OI Top排名
@@ -78,6 +94,7 @@ type Context struct {
 	Account         AccountInfo             `json:"account"`
 	Positions       []PositionInfo          `json:"positions"`
 	CandidateCoins  []CandidateCoin         `json:"candidate_coins"`
+	OpenOrders      []OpenOrderInfo         `json:"open_orders,omitempty"`
 	MarketDataMap   map[string]*market.Data `json:"-"` // 不序列化，但内部使用
 	OITopDataMap    map[string]*OITopData   `json:"-"` // OI Top数据映射
 	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
@@ -100,7 +117,7 @@ type NewsBrief struct {
 // Decision AI的交易决策
 type Decision struct {
 	Symbol string `json:"symbol"`
-	Action string `json:"action"` // "open_long", "open_short", "close_long", "close_short", "update_stop_loss", "update_take_profit", "partial_close", "hold", "wait"
+	Action string `json:"action"` // "open_long", "open_short", "close_long", "close_short", "update_stop_loss", "update_take_profit", "partial_close", "cancel_limit_order", "replace_limit_order", "hold", "wait"
 
 	// 订单参数 (新增)
 	OrderType   string  `json:"order_type,omitempty"`    // "market", "limit" (默认market)
@@ -118,6 +135,7 @@ type Decision struct {
 	NewStopLoss     float64 `json:"new_stop_loss,omitempty"`    // 用于 update_stop_loss
 	NewTakeProfit   float64 `json:"new_take_profit,omitempty"`  // 用于 update_take_profit
 	ClosePercentage float64 `json:"close_percentage,omitempty"` // 用于 partial_close (0-100)
+	TargetOrderID   int64   `json:"target_order_id,omitempty"`  // 用于 cancel_limit_order / replace_limit_order
 
 	// 通用参数
 	Confidence int     `json:"confidence,omitempty"` // 信心度 (0-100)
@@ -351,7 +369,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("字段说明:\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
+	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | cancel_limit_order | replace_limit_order | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
 	sb.WriteString("- `order_type`: market | limit（默认 market；当策略或规则要求限价单时，必须显式指定为 limit）\n")
 	sb.WriteString("- `limit_price`: 仅当 order_type 为 limit 时必填，对应限价单价格\n")
@@ -433,6 +451,20 @@ func buildUserPrompt(ctx *Context) string {
 		}
 	} else {
 		sb.WriteString("当前持仓: 无\n\n")
+	}
+
+	// 挂单（简要列表）
+	if len(ctx.OpenOrders) > 0 {
+		sb.WriteString("## 当前挂单\n")
+		for _, order := range ctx.OpenOrders {
+			side := strings.ToUpper(order.Side)
+			// 只展示关键字段，避免token过长
+			sb.WriteString(fmt.Sprintf("- %s #%d %s @ %.4f 数量%.4f 已成交%.4f 状态:%s\n",
+				order.Symbol, order.OrderID, side, order.Price, order.OrigQty, order.ExecutedQty, order.Status))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("当前挂单: 无\n\n")
 	}
 
 	// 候选币种（完整市场数据）
@@ -733,6 +765,8 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		"update_stop_loss":   true,
 		"update_take_profit": true,
 		"partial_close":      true,
+		"cancel_limit_order": true,
+		"replace_limit_order": true,
 		"hold":               true,
 		"wait":               true,
 	}
@@ -863,6 +897,23 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	if d.Action == "partial_close" {
 		if d.ClosePercentage <= 0 || d.ClosePercentage > 100 {
 			return fmt.Errorf("平仓百分比必须在0-100之间: %.1f", d.ClosePercentage)
+		}
+	}
+
+	// 取消限价单验证
+	if d.Action == "cancel_limit_order" {
+		if d.TargetOrderID <= 0 {
+			return fmt.Errorf("cancel_limit_order 必须提供有效的 target_order_id")
+		}
+	}
+
+	// 改价限价单验证
+	if d.Action == "replace_limit_order" {
+		if d.TargetOrderID <= 0 {
+			return fmt.Errorf("replace_limit_order 必须提供有效的 target_order_id")
+		}
+		if d.LimitPrice <= 0 {
+			return fmt.Errorf("replace_limit_order 必须提供新的 limit_price > 0，当前: %.4f", d.LimitPrice)
 		}
 	}
 

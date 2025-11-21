@@ -153,23 +153,23 @@ func (c *AnomalyConfig) applySensitivityMapping() {
     switch c.Sensitivity {
     case SensitivityLow:
         c.internal.PriceThresholdK = 3.0       // ATR 标准化系数
-        c.internal.AbsMinPriceChangePct = 5.0  // 绝对阈值 5%
-        c.internal.VolumeMultiplierM = 2.5     // 成交量倍数
-        c.internal.ConsecutiveThreshold = 0.09 // 9%
+        c.internal.AbsMinPriceChangePct = 3.0  // 绝对阈值 5%
+        c.internal.VolumeMultiplierM = 2.0     // 成交量倍数
+        c.internal.ConsecutiveThreshold = 0.06 // 9%
         c.internal.MinVolumeUSDT = 2000000     // 2M USDT
 
     case SensitivityMedium:
         c.internal.PriceThresholdK = 2.5
-        c.internal.AbsMinPriceChangePct = 3.0  // 绝对阈值 3%
-        c.internal.VolumeMultiplierM = 2.0
-        c.internal.ConsecutiveThreshold = 0.07 // 7%
+        c.internal.AbsMinPriceChangePct = 2.0  // 绝对阈值 3%
+        c.internal.VolumeMultiplierM = 1.5
+        c.internal.ConsecutiveThreshold = 0.05 // 7%
         c.internal.MinVolumeUSDT = 1000000     // 1M USDT
 
     case SensitivityHigh:
         c.internal.PriceThresholdK = 2.0
         c.internal.AbsMinPriceChangePct = 1.5  // 绝对阈值 1.5%
-        c.internal.VolumeMultiplierM = 1.6
-        c.internal.ConsecutiveThreshold = 0.05 // 5%
+        c.internal.VolumeMultiplierM = 1.0
+        c.internal.ConsecutiveThreshold = 0.03 // 5%
         c.internal.MinVolumeUSDT = 500000      // 500K USDT
     }
 }

@@ -5,6 +5,7 @@
 - 允许使用 `partial_close` 锁定利润或降低风险
   - ⚠️ 闭环检查（强制）：平仓前验证“剩余仓位价值 > $10”
   - 若 ≤$10，必须改用完全平仓
+  - ⚠️ TP/SL 恢复（强制）：执行 `partial_close` 时必须同时提供 `new_stop_loss` 和 `new_take_profit` 字段，为剩余仓位恢复止损/止盈保护；若暂时无法给出新的价格，应避免使用 `partial_close`，改用 `hold` 或完全平仓
 - 每笔交易必须预设止损与止盈，单笔账户风险不超过 3-4%
 - 止损距离原则：初始止损不得贴在入场价附近，做多/做空时**止损价与预期入场价通常应至少相距 1.5–2.0%**，严禁 <1% 的“噪音止损”（除非为极短线 scalp 并在 reasoning 中充分说明理由与结构依据）
 - 预估清算价距离 ≥15%，避免被强平
@@ -12,9 +13,24 @@
 - 名义价值 ≥ 交易所最小名义（NOTIONAL/MIN_NOTIONAL；BTC/ETH 常见 ≥100U；不足 → wait）；数量需按 MARKET_LOT_SIZE/LOT_SIZE 步长对齐（向下取整后仍需满足最小名义）
 - 止损距离（硬性）：止损距离 ≥ max(1.0%, 0.8×3m ATR%)；过小 → wait（避免噪音触发）
 - 保护单方向（硬性）：LONG → SL < 当前价、TP > 当前价；SHORT → SL > 当前价、TP < 当前价；方向不符 → wait
+ - 每轮决策时，需先审视当前所有持仓：优先通过 `hold`、`update_stop_loss`、`update_take_profit`、`partial_close` 管理风险，仅在“入场逻辑被推翻 / 超预期收益 / 风险显著放大”等充分理由下，才开新仓或执行完全平仓（`close_long`/`close_short`）
 
 # 仓位管理框架（与系统保持一致）
 
 - 单币上限：可用资金的 30%
 - 总仓位上限：80%
 - 最大持仓数：3 个（与系统硬约束一致）
+
+## 挂单管理（限价单）
+
+- 参考系统提供的「当前挂单」列表：当某些限价单价格明显偏离当前价格、短期几乎不可能成交、且不再符合最新分析逻辑时，应优先通过 `cancel_limit_order` 撤销这些“僵尸挂单”，释放风险敞口与保证金。
+- 若仅需要**调整同一方向的入场价格**（方向与数量仍合理），优先使用 `replace_limit_order` 对指定 `target_order_id` 改价，而不是重新发起新的 `open_long` / `open_short` 来叠加 CancelAllOrders：
+  - `replace_limit_order` 会自动复用原挂单的方向与剩余数量，只修改 `limit_price`；
+  - reasoning 中需简要说明：为何原价不再合理、为何新价格更优（例如更接近关键支撑/阻力、风险回报改善等）。
+
+示例（JSON 片段，仅供参考）：
+
+```json
+{"symbol": "BTCUSDT", "action": "cancel_limit_order", "target_order_id": 123456, "reasoning": "当前挂单价格远离最新价，成交概率极低且占用保证金，先撤单等待更优结构"}
+{"symbol": "ETHUSDT", "action": "replace_limit_order", "target_order_id": 789012, "limit_price": 3250, "time_in_force": "GTC", "post_only": true, "reasoning": "结构仍然成立，但更接近支撑位的入场价风险回报更优"}
+```

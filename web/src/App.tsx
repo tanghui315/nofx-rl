@@ -728,7 +728,8 @@ function TraderDetailsPage({
           {status?.strategy_routing && (
             <div className="animate-slide-in" style={{ animationDelay: '0.05s' }}>
               <StrategyRoutingPanel 
-                routing={status.strategy_routing} 
+                routing={status.strategy_routing}
+                trendDirections={status.strategy_routing_trend}
                 language={language} 
               />
             </div>

@@ -12,6 +12,7 @@ export interface SystemStatus {
   last_reset_time: string
   ai_provider: string
   strategy_routing?: { [symbol: string]: string } // 新增：策略路由信息
+  strategy_routing_trend?: { [symbol: string]: string }
 }
 
 export interface OpenOrder {
@@ -116,6 +117,7 @@ export interface TraderInfo {
   use_coin_pool?: boolean
   use_oi_top?: boolean
   strategy_routing?: { [symbol: string]: string } // 新增
+  strategy_routing_trend?: { [symbol: string]: string }
 }
 
 export interface AIModel {
